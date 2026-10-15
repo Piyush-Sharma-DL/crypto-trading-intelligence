@@ -10,6 +10,53 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 
+CRYPTO_QUOTES = {"USD", "USDT", "EUR", "GBP", "INR", "JPY", "AUD", "CAD", "BTC", "ETH"}
+
+
+def _is_crypto(ticker: str) -> bool:
+    return "-" in ticker and ticker.upper().split("-")[-1] in CRYPTO_QUOTES
+
+
+def _utc_today() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+
+
+def _hourly_to_daily(h: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate hourly bars into UTC daily bars (n = number of hourly bars in the day)."""
+    h = h.copy()
+    h.index = pd.to_datetime(h.index)
+    if h.index.tz is not None:
+        h.index = h.index.tz_convert("UTC").tz_localize(None)
+    g = h.groupby(h.index.normalize())
+    return pd.DataFrame({"Open": g["Open"].first(), "High": g["High"].max(), "Low": g["Low"].min(),
+                         "Close": g["Close"].last(), "Volume": g["Volume"].sum(), "n": g.size()})
+
+
+def fill_recent_gaps(df: pd.DataFrame, ticker: str, hourly: pd.DataFrame | None = None):
+    """Yahoo's daily feed sometimes skips a recent completed day. Rebuild it from hourly bars.
+    Only complete days (>= 20 hourly bars) inside the last 7 days are added. Returns (df, added_dates)."""
+    today = _utc_today()
+    missing = [d for d in pd.date_range(today - pd.Timedelta(days=7), today - pd.Timedelta(days=1))
+               if d not in df.index]
+    if not missing:
+        return df, []
+    if hourly is None:
+        import yfinance as yf
+
+        hourly = yf.download(ticker, period="10d", interval="1h", auto_adjust=True, progress=False)
+        if isinstance(hourly.columns, pd.MultiIndex):
+            hourly.columns = hourly.columns.get_level_values(0)
+    hourly = hourly[COLUMNS].dropna(subset=["Close"])
+    daily = _hourly_to_daily(hourly)
+    add = daily[daily.index.isin(missing) & (daily["n"] >= 20)].drop(columns="n")
+    if add.empty:
+        return df, []
+    out = pd.concat([df, add]).sort_index()
+    out = out[~out.index.duplicated(keep="first")]
+    out.index.name = "Date"
+    return out, list(add.index)
+
+
 def fetch_yahoo(ticker: str, years: int) -> pd.DataFrame:
     import yfinance as yf
 
@@ -26,6 +73,13 @@ def fetch_yahoo(ticker: str, years: int) -> pd.DataFrame:
         raise ValueError(f"No data returned for {ticker}")
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df.index.name = "Date"
+    patched = []
+    if _is_crypto(ticker):
+        try:
+            df, patched = fill_recent_gaps(df, ticker)
+        except Exception:
+            patched = []
+    df.attrs["patched"] = patched
     return df
 
 
@@ -63,7 +117,11 @@ def load_prices(ticker: str, years: int = 5, offline: bool = False) -> tuple[pd.
             df = fetch_yahoo(ticker, years)
             DATA_DIR.mkdir(exist_ok=True)
             df.to_csv(cache)
-            return df, f"Yahoo Finance (live, latest bar {df.index[-1].date()})"
+            note = ""
+            if df.attrs.get("patched"):
+                days = ", ".join(f"{d:%b %d}" for d in df.attrs["patched"])
+                note = f"; rebuilt missing day(s) {days} from hourly data"
+            return df, f"Yahoo Finance (live, latest bar {df.index[-1].date()}{note})"
         except Exception as exc:  # network down, bad ticker, rate limit...
             if cache.exists():
                 df = pd.read_csv(cache, index_col=0, parse_dates=True)
