@@ -9,6 +9,7 @@ from src import charts as ch
 from src import paper
 from src.backtest import backtest
 from src.data import completed_bars, load_extras, load_prices
+from src.features import add_indicators, tail_diagnostics
 from src.pipeline import NAIVE, run_experiment, summarize
 from src.report import build_report
 from src.risk import apply_stop, monte_carlo, vol_target
@@ -101,6 +102,20 @@ for note in exp.notes + extra_notes:
     st.warning(note)
 if synthetic:
     st.warning("Synthetic random-walk data: for demonstrating the pipeline only, not real prices.")
+
+# data-health check: the newest completed daily bar should be yesterday (UTC)
+expected_last = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize() - pd.Timedelta(days=1)
+if not synthetic and exp.last_date < expected_last:
+    if df.index[-1] < expected_last:
+        gaps = pd.date_range(df.index[-8], df.index[-1]).difference(df.index)
+        st.warning(f"Yahoo Finance has no completed bar for {expected_last:%b %d} (newest completed bar: "
+                   f"{df.index[-1]:%b %d}"
+                   + (f"; missing days: {', '.join(f'{g:%b %d}' for g in gaps)}" if len(gaps) else "")
+                   + f"). Forecasts start from {exp.last_date:%b %d}. Try 'Refresh live data' in a few minutes.")
+    else:
+        cols = tail_diagnostics(add_indicators(df), extras)
+        st.warning(f"The {df.index[-1]:%b %d} bar was unusable because these features were empty: "
+                   f"{', '.join(cols) or 'unknown'}. Forecasts start from {exp.last_date:%b %d}.")
 
 selected = st.selectbox("Model driving the trading signal", models, index=models.index("Ensemble"))
 latest_idx = ind.index[[-1]]
