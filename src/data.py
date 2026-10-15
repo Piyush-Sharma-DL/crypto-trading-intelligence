@@ -17,7 +17,11 @@ def fetch_yahoo(ticker: str, years: int) -> pd.DataFrame:
                      auto_adjust=True, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df[COLUMNS].dropna()
+    df = df[COLUMNS].copy()
+    df = df[df["Close"].notna()]                       # keep every bar that has a close
+    df["Volume"] = df["Volume"].fillna(0)
+    for col in ("Open", "High", "Low"):
+        df[col] = df[col].fillna(df["Close"])
     if df.empty:
         raise ValueError(f"No data returned for {ticker}")
     df.index = pd.to_datetime(df.index).tz_localize(None)

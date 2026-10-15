@@ -33,8 +33,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-def build_features(d: pd.DataFrame, extra: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Model inputs. Row t only uses information available at the close of day t."""
+def _raw_features(d: pd.DataFrame, extra: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Feature table before NaN rows are removed. Row t only uses information available at the close of day t."""
     c = d["Close"]
     f = pd.DataFrame(index=d.index)
     logret = np.log(c).diff()
@@ -65,4 +65,14 @@ def build_features(d: pd.DataFrame, extra: pd.DataFrame | None = None) -> pd.Dat
             if col in ex:
                 f[f"{tag}_ret1"] = np.log(ex[col] / ex[col].shift(1))
                 f[f"{tag}_ret5"] = np.log(ex[col] / ex[col].shift(5))
-    return f.replace([np.inf, -np.inf], np.nan).dropna()
+    return f.replace([np.inf, -np.inf], np.nan)
+
+
+def build_features(d: pd.DataFrame, extra: pd.DataFrame | None = None) -> pd.DataFrame:
+    return _raw_features(d, extra).dropna()
+
+
+def tail_diagnostics(d: pd.DataFrame, extra: pd.DataFrame | None = None) -> list[str]:
+    """Names of features that are empty on the most recent bar (those make the bar unusable)."""
+    raw = _raw_features(d, extra)
+    return list(raw.columns[raw.iloc[-1].isna()])
