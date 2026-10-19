@@ -14,6 +14,10 @@ st.markdown("""
         font-size:1.6rem; letter-spacing:.07em; color:#0b1220;}
 .subtle {color:#94a3b8; font-size:.85rem;}
 .hero {font-size:2.1rem; font-weight:800; margin-bottom:0;}
+/* metric cards shrink with the window instead of being cut off */
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] div {font-size: clamp(1.05rem, 2.1vw, 2.2rem) !important;}
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p {font-size: clamp(.62rem, 1vw, .9rem) !important; white-space: normal !important;}
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] div {font-size: clamp(.6rem, .9vw, .85rem) !important;}
 </style>""", unsafe_allow_html=True)
 
 pages = [
