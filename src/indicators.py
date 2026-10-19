@@ -8,7 +8,7 @@ import pandas as pd
 from .features import rsi as _rsi
 
 DEFAULTS = dict(tott_length=40, tott_percent=1.0, tott_coeff=0.001,
-                fvg_min_atr=0.25, ob_swing=10, ob_disp=1.5, ob_back=10, max_zones=5)
+                fvg_min_atr=0.25, ob_swing=10, ob_disp=1.5, ob_back=10, ob_body=True, max_zones=3)
 
 
 # ------------------------------------------------------------------ classic indicators
@@ -152,10 +152,12 @@ def fvg_zones(df: pd.DataFrame, min_atr: float = 0.25) -> list[dict]:
 
 
 # ------------------------------------------------------------------ order blocks
-def order_blocks(df: pd.DataFrame, swing: int = 10, disp: float = 1.5, back: int = 10) -> list[dict]:
+def order_blocks(df: pd.DataFrame, swing: int = 10, disp: float = 1.5, back: int = 10,
+                 body_only: bool = True) -> list[dict]:
     """Bullish OB: the last down-close candle before a strong up-move that breaks the recent swing high.
     Bearish OB: the last up-close candle before a strong down-move that breaks the recent swing low.
-    'Strong' = candle body larger than `disp` x ATR. Mitigated when a later candle closes through the zone."""
+    'Strong' = candle body larger than `disp` x ATR. The zone is the candle body (or the full range with wicks if
+    body_only=False). Mitigated when a later candle closes through the zone."""
     o, h, l, c = (df[k].values for k in ("Open", "High", "Low", "Close"))
     a = np.nan_to_num(atr(df).values)
     idx, zones, used = df.index, [], set()
@@ -171,7 +173,7 @@ def order_blocks(df: pd.DataFrame, swing: int = 10, disp: float = 1.5, back: int
             continue
         j = cand[0]
         used.add((kind, j))
-        top, bottom = float(h[j]), float(l[j])
+        top, bottom = (float(max(o[j], c[j])), float(min(o[j], c[j]))) if body_only else (float(h[j]), float(l[j]))
         hit = np.where(c[i + 1:] < bottom)[0] if kind == "bull_ob" else np.where(c[i + 1:] > top)[0]
         zones.append(dict(kind=kind, i=j, t0=idx[j], top=top, bottom=bottom,
                           mitigated=bool(len(hit)), t_mit=idx[i + 1 + hit[0]] if len(hit) else None))
@@ -196,7 +198,7 @@ def compute_all(df: pd.DataFrame, tf_minutes: int, cfg: dict | None = None) -> d
         st=supertrend(df),
         tott=tott(df, cfg["tott_length"], cfg["tott_percent"], cfg["tott_coeff"]),
         fvg=fvg_zones(df, cfg["fvg_min_atr"]),
-        ob=order_blocks(df, cfg["ob_swing"], cfg["ob_disp"], cfg["ob_back"]),
+        ob=order_blocks(df, cfg["ob_swing"], cfg["ob_disp"], cfg["ob_back"], cfg["ob_body"]),
     )
 
 

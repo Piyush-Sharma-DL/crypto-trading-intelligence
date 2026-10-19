@@ -23,7 +23,8 @@ def _loc(x, tz: str):
 
 
 def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: list[str], ind: dict,
-               zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "") -> go.Figure:
+               zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "",
+               show_old_zones: bool = False) -> go.Figure:
     v = df.iloc[-n:]
     x = _loc(v.index, tz)
     step = pd.Timedelta(minutes=tf_minutes)
@@ -42,13 +43,17 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
     shown = []
     end = _loc(v.index[-1] + step * max(4, n // 12), tz)
     lo, hi = float(v["Low"].min()), float(v["High"].max())
-    pad = (hi - lo) * 0.25
+    margin = (hi - lo) * 0.06
+    y_lo, y_hi = lo - margin, hi + margin                         # axis fits the candles, not far-away zones
     for z in zones:
+        t0 = _loc(z["t0"], tz)
         t_end = _loc(z["t_mit"], tz) if z["mitigated"] else end
-        if t_end < x[0] or z["top"] < lo - pad or z["bottom"] > hi + pad:
+        if t_end < x[0] or z["top"] < y_lo or z["bottom"] > y_hi:
+            continue
+        if t0 < x[0] and not show_old_zones:                      # formed before the visible candles
             continue
         fill, border, label = ZONE_STYLE[z["kind"]]
-        fig.add_shape(type="rect", x0=max(_loc(z["t0"], tz), x[0]), x1=t_end, y0=z["bottom"], y1=z["top"],
+        fig.add_shape(type="rect", x0=max(t0, x[0]), x1=t_end, y0=z["bottom"], y1=z["top"],
                       fillcolor=fill, line=dict(color=border, width=1), layer="below", row=1, col=1)
         shown.append((z, label))
     for z, label in shown:
@@ -110,5 +115,5 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
     fig.update_layout(template="plotly_dark", height=560 + 150 * n_pan, margin=dict(l=10, r=70, t=10, b=10),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
                       legend=dict(orientation="h", y=1.04), dragmode="pan", uirevision=uirevision, hovermode="x")
-    fig.update_yaxes(side="right", row=1, col=1)
+    fig.update_yaxes(side="right", range=[y_lo, y_hi], row=1, col=1)
     return fig
