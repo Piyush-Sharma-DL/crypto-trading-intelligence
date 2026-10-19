@@ -1,0 +1,140 @@
+"""Live Chart page: real-time price, multi-timeframe candles and user-selectable indicators.
+Default chart indicators: TOTT, IMBA (imbalance / fair value gaps) and order blocks."""
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from src import indicators as I
+from src.live import TIMEFRAMES, candle_seconds_left, get_candles, get_quote
+from src.livechart import live_chart
+
+COINS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "DOT-USD"]
+IMBA, OB = "IMBA (Imbalance / FVG)", "Order Blocks"
+OVERLAYS = ["TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
+PANELS = ["Volume", "RSI", "MACD"]
+ZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Dubai", "Asia/Tokyo", "Australia/Sydney"]
+
+
+# ---------------------------------------------------------------- short-lived caches (shared by visitors)
+@st.cache_data(ttl=4, show_spinner=False)
+def candles(ticker, tf, n):
+    return get_candles(ticker, tf, n)
+
+
+@st.cache_data(ttl=3, show_spinner=False)
+def quote(ticker, tf, df):
+    return get_quote(ticker, tf, df)
+
+
+def countdown(sec: int) -> str:
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    return (f"{d}d " if d else "") + f"{h:02d}:{m:02d}:{s:02d}"
+
+
+# ---------------------------------------------------------------- sidebar
+with st.sidebar:
+    st.title("📡 Live controls")
+    preset = st.selectbox("Asset", COINS + ["Custom..."])
+    custom = st.text_input("Custom ticker (Yahoo format, e.g. LTC-USD)", "LTC-USD")
+    tf = st.radio("Candle size", list(TIMEFRAMES), index=1, horizontal=True)
+    bars = st.slider("Candles on chart", 50, 400, 150, 10)
+    tz = st.selectbox("Display time zone", ZONES)
+
+    st.subheader("Live updates")
+    auto = st.toggle("Auto-refresh", True)
+    every = st.select_slider("Refresh every (seconds)", [5, 10, 15, 30, 60], value=15)
+
+    st.subheader("Indicators")
+    overlays = st.multiselect("On the chart", OVERLAYS, default=[OVERLAYS[0], IMBA, OB],
+                              help="Default: TOTT, IMBA and Order Blocks. Add or remove anything.")
+    panels = st.multiselect("Extra panels below", PANELS, default=[])
+    with st.expander("Indicator settings"):
+        st.markdown("**TOTT** (Twin Optimized Trend Tracker)")
+        tott_len = st.number_input("OTT period", 2, 200, 40)
+        tott_pct = st.number_input("Optimization constant (%)", 0.1, 10.0, 1.0, 0.1)
+        tott_coeff = st.number_input("Twin coefficient", 0.0, 0.05, 0.001, 0.0005, format="%.4f")
+        st.markdown("**IMBA** (fair value gaps)")
+        fvg_min = st.number_input("Minimum gap size (x ATR)", 0.0, 3.0, 0.25, 0.05)
+        st.markdown("**Order blocks**")
+        ob_swing = st.number_input("Structure lookback (candles)", 3, 50, 10)
+        ob_disp = st.number_input("Impulse size (x ATR)", 0.5, 5.0, 1.5, 0.1)
+        max_zones = st.number_input("Max zones shown per type", 1, 15, 5)
+        show_mit = st.checkbox("Also show mitigated zones", False)
+
+ticker = custom.strip().upper() if preset == "Custom..." else preset
+cfg = dict(tott_length=int(tott_len), tott_percent=float(tott_pct), tott_coeff=float(tott_coeff),
+           fvg_min_atr=float(fvg_min), ob_swing=int(ob_swing), ob_disp=float(ob_disp), max_zones=int(max_zones))
+
+st.markdown(f"<p class='hero'>📡 {ticker} · Live</p>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------- the live panel (re-runs on its own timer)
+@st.fragment(run_every=f"{every}s" if auto else None)
+def live_panel():
+    need = min(bars + 250, 260) if tf == "1W" else bars + 250        # extra candles warm the indicators up
+    try:
+        df, source = candles(ticker, tf, need)
+    except Exception as exc:
+        st.error(f"Could not load live data for {ticker}: {exc}")
+        return
+    q, qsrc = quote(ticker, tf, df)
+    price = q["price"]
+    if qsrc == "Kraken":                                              # make the forming candle match the latest trade
+        df = df.copy()
+        df.iloc[-1, df.columns.get_loc("Close")] = price
+        df.iloc[-1, df.columns.get_loc("High")] = max(df["High"].iloc[-1], price)
+        df.iloc[-1, df.columns.get_loc("Low")] = min(df["Low"].iloc[-1], price)
+
+    chg = (price / q["open"] - 1) * 100
+    m = st.columns([1.5, 1, 1, 1, 1.2])
+    m[0].metric(f"{ticker} live price", f"${price:,.2f}", f"{chg:+.2f}% vs {q['open_label']}")
+    m[1].metric(f"{q['window']} high", f"${q['high']:,.2f}")
+    m[2].metric(f"{q['window']} low", f"${q['low']:,.2f}")
+    m[3].metric(f"{q['window']} volume", f"{q['volume']:,.0f}")
+    m[4].metric(f"{tf} candle closes in", countdown(candle_seconds_left(df.index[-1], tf)))
+    now = pd.Timestamp.now(tz="UTC")
+    st.caption(f"Candles: **{source}** · price: {qsrc} · updated {now:%H:%M:%S} UTC · "
+               + (f"auto-refresh every {every}s" if auto else "auto-refresh off")
+               + f" · chart times in {tz}")
+
+    ind = I.compute_all(df, TIMEFRAMES[tf], cfg)
+    zones = []
+    if IMBA in overlays:
+        zones += I.keep_recent(ind["fvg"], cfg["max_zones"], show_mit)
+    if OB in overlays:
+        zones += I.keep_recent(ind["ob"], cfg["max_zones"], show_mit)
+    fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}")
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
+
+    left, right = st.columns([3, 2])
+    with left:
+        snap, summ = I.snapshot(df, ind)
+        st.markdown(f"**Live indicator tracker** · 🟢 {summ['bull']} bullish · 🔴 {summ['bear']} bearish · ⚪ {summ['neutral']} neutral")
+        st.dataframe(snap, hide_index=True, use_container_width=True)
+    with right:
+        st.markdown("**Nearest unmitigated zones**")
+        zt = I.active_zones(ind["fvg"] + ind["ob"], price, len(df)).head(8)
+        zt["Distance %"] = zt["Distance %"].round(2)
+        st.dataframe(zt, hide_index=True, use_container_width=True)
+    st.caption("Indicator values include the candle that is still forming, so they can change until it closes.")
+
+
+live_panel()
+
+with st.expander("What do these indicators mean?"):
+    st.markdown("""
+**TOTT, Twin Optimized Trend Tracker** (by Anil Ozeksi). A trend follower built from a smoothed support line (VAR moving average)
+and a trailing stop (OTT). The two OTT lines sit slightly above and below it. **BUY** when the support line crosses above the upper
+line, **SELL** when it crosses below the lower line; between the lines is a flat zone. Defaults (period 40, 1%) suit slower charts, so tune them
+for 5-minute candles.
+
+**IMBA, imbalance / fair value gap.** Three candles where the 1st candle's high and the 3rd candle's low do not overlap (or the reverse),
+leaving a price gap. Price often revisits it. A green zone is a bullish gap, red is bearish, and it disappears once price trades fully through it.
+
+**Order blocks.** The last opposite-colour candle before a strong impulsive move that breaks recent structure. Blue = bullish block (possible support),
+amber = bearish block (possible resistance). A block is mitigated once a candle closes through it.
+
+*These are analysis tools, not predictions. Nothing here is financial advice.*
+""")
