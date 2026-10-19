@@ -1,6 +1,6 @@
 # 📈 Cryptocurrency Price Prediction & Trading Intelligence System
 
-A research-grade crypto forecasting and trading-signal platform: walk-forward validated ML + LSTM,
+A two-part crypto platform: a **live multi-timeframe chart** with TOTT, IMBA and order-block indicators, and a research-grade **forecasting lab**: walk-forward validated ML + LSTM,
 statistical significance testing, explainable BUY / HOLD / SELL signals, risk-aware backtesting,
 a multi-asset scanner and a live paper-trading track record, all in one Streamlit dashboard.
 
@@ -10,9 +10,23 @@ python -m venv .venv && .venv\Scripts\activate          # Mac/Linux: source .ven
 pip install -r requirements-lstm.txt                    # includes PyTorch for the LSTM
 streamlit run app.py                                    # or double-click Start-Dashboard.bat (Windows)
 ```
-Tests (no internet needed): `python -m tests.smoke_test` and `python -m tests.ui_smoke`.
+Tests (no internet needed): `python -m tests.smoke_test`, `python -m tests.live_test`, `python -m tests.ui_smoke` (the last also runs the indicator tests).
 
-## What makes it more than a basic LSTM project
+## Pages
+| Page | What it does |
+|---|---|
+| 📡 **Live Chart** | Real-time price, candles at 5m / 15m / 30m / 1h / 4h / 1D / 1W, auto-refresh, user-selectable indicators, live indicator tracker, nearest imbalance / order-block zones |
+| 🧪 **Forecast Lab** | Walk-forward ML forecasts, significance tests, signals, backtest, scanner, live track record |
+
+### Live Chart indicators
+Default on the chart: **TOTT**, **IMBA**, **Order Blocks**. Optional: SMA 20/50, EMA 21/200, Bollinger Bands, VWAP, Supertrend, and Volume / RSI / MACD panels.
+The tracker table always shows live SMA, EMA, RSI, MACD, Bollinger %B, VWAP, ATR, Supertrend and TOTT readings.
+- **TOTT** = Twin Optimized Trend Tracker (Anil Ozeksi): VAR moving average + OTT trailing stop, with twin lines OTT x (1 +/- coeff) plotted 2 bars late. BUY when the support line crosses above the upper line, SELL below the lower line. Defaults 40 / 1% / 0.001 are from the original; tune for short timeframes. (Differences from the Pine original: VAR is seeded with the first price instead of 0, and signals strictly alternate.)
+- **IMBA** = imbalance / fair value gap: 3-candle gap (bullish: low[i] > high[i-2]; bearish: high[i] < low[i-2]) larger than a minimum ATR fraction, removed once price trades fully through it.
+- **Order blocks**: last opposite-colour candle before an impulse (body > 1.5 x ATR) that breaks the recent swing high/low; mitigated when a candle closes through it. Order-block rules vary between traders; this is one common, rule-based version.
+- Data: Kraken public API (real-time, no key) with Yahoo Finance fallback. Weekly candles start Monday 00:00 UTC.
+
+## What makes the Forecast Lab more than a basic LSTM project
 | Capability | Where | Why it matters |
 |---|---|---|
 | **Walk-forward validation** | `pipeline.py` | Models are retrained every N days, like real deployment, instead of one lucky split |
