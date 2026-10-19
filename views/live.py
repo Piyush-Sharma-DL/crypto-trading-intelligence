@@ -60,12 +60,15 @@ with st.sidebar:
         st.markdown("**Order blocks**")
         ob_swing = st.number_input("Structure lookback (candles)", 3, 50, 10)
         ob_disp = st.number_input("Impulse size (x ATR)", 0.5, 5.0, 1.5, 0.1)
-        max_zones = st.number_input("Max zones shown per type", 1, 15, 5)
+        ob_zone = st.selectbox("Order block zone covers", ["Candle body", "Full candle (with wicks)"])
+        max_zones = st.number_input("Max zones shown per type", 1, 15, 3)
         show_mit = st.checkbox("Also show mitigated zones", False)
+        show_old = st.checkbox("Show zones that formed before the visible candles", False)
 
 ticker = custom.strip().upper() if preset == "Custom..." else preset
 cfg = dict(tott_length=int(tott_len), tott_percent=float(tott_pct), tott_coeff=float(tott_coeff),
-           fvg_min_atr=float(fvg_min), ob_swing=int(ob_swing), ob_disp=float(ob_disp), max_zones=int(max_zones))
+           fvg_min_atr=float(fvg_min), ob_swing=int(ob_swing), ob_disp=float(ob_disp), ob_body=(ob_zone == "Candle body"),
+           max_zones=int(max_zones))
 
 st.markdown(f"<p class='hero'>📡 {ticker} · Live</p>", unsafe_allow_html=True)
 
@@ -105,7 +108,8 @@ def live_panel():
         zones += I.keep_recent(ind["fvg"], cfg["max_zones"], show_mit)
     if OB in overlays:
         zones += I.keep_recent(ind["ob"], cfg["max_zones"], show_mit)
-    fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}")
+    fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}",
+                     show_old_zones=show_old)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
 
     left, right = st.columns([3, 2])
