@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/*.csv
+# --- PRIVATE: never upload these ---
+.streamlit/secrets.toml
+data/private/
+*.db
+*.db-wal
+*.db-shm

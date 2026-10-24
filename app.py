@@ -4,6 +4,8 @@ Pages: views/live.py (live chart) and views/forecast.py (ML forecast lab).
 """
 import streamlit as st
 
+from src import auth
+
 st.set_page_config(page_title="Crypto Trading Intelligence", page_icon="📈", layout="wide")
 st.markdown("""
 <style>
@@ -24,4 +26,9 @@ pages = [
     st.Page("views/live.py", title="Live Chart", icon="📡", default=True),
     st.Page("views/forecast.py", title="Forecast Lab", icon="🧪"),
 ]
+# the private page is only registered for the signed-in owner; everyone else gets a sign-in page instead
+if auth.is_owner():
+    pages.append(st.Page("views/bot.py", title="Bot Desk", icon="🤖"))
+else:
+    pages.append(st.Page("views/login.py", title="Owner sign-in", icon="🔐"))
 st.navigation(pages).run()
