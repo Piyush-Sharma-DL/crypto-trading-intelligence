@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+CONF = "Confluence (TOTT + IMBA + OB)"
 GREEN, RED, BLUE, AMBER, VIOLET = "#22c55e", "#ef4444", "#38bdf8", "#f59e0b", "#a78bfa"
 ZONE_STYLE = {  # fill, border, label
     "bull_fvg": ("rgba(34,197,94,.16)", "rgba(34,197,94,.55)", "IMBA ↑"),
@@ -24,7 +25,7 @@ def _loc(x, tz: str):
 
 def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: list[str], ind: dict,
                zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "",
-               show_old_zones: bool = False) -> go.Figure:
+               show_old_zones: bool = False, conf: pd.DataFrame | None = None) -> go.Figure:
     v = df.iloc[-n:]
     x = _loc(v.index, tz)
     step = pd.Timedelta(minutes=tf_minutes)
@@ -61,7 +62,7 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
                            yanchor="bottom", font=dict(size=10, color=ZONE_STYLE[z["kind"]][1]), row=1, col=1)
 
     # ---- overlays
-    if "TOTT" in overlays:
+    if "TOTT" in overlays or CONF in overlays:
         t = ind["tott"].reindex(v.index)
         line(t["support"], "TOTT support", BLUE, 2)
         line(t["ott_up"], "OTT up", GREEN, 1.6)
@@ -70,11 +71,31 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
         for col, label, color, sym, ref, mult in (("buy", "BUY", GREEN, "triangle-up", "Low", 0.9985),
                                                   ("sell", "SELL", RED, "triangle-down", "High", 1.0015)):
             m = t[col].values
-            if m.any():
+            if "TOTT" in overlays and m.any():
                 fig.add_trace(go.Scatter(x=x[m], y=(v[ref].values * mult)[m], mode="markers+text", name=f"TOTT {label}",
                                          text=[label] * int(m.sum()), textfont=dict(size=10, color=color),
                                          textposition="bottom center" if col == "buy" else "top center",
                                          marker=dict(symbol=sym, size=11, color=color)), 1, 1)
+    if conf is not None and CONF in overlays:
+        cv = conf.reindex(v.index)
+        for side, name, color, sym, ref, mult, pos in ((1, "LONG", GREEN, "triangle-up", "Low", 0.997, "bottom center"),
+                                                       (-1, "SHORT", RED, "triangle-down", "High", 1.003, "top center")):
+            m = (cv["signal"] == side).fillna(False).values
+            if m.any():
+                fig.add_trace(go.Scatter(
+                    x=x[m], y=(v[ref].values * mult)[m], mode="markers+text", name=f"Confluence {name}",
+                    text=[f"{name} {int(k)}" for k in cv["conf"].values[m]], textposition=pos, textfont=dict(size=10, color=color),
+                    marker=dict(symbol=sym, size=13, color=color, line=dict(width=1, color="white")),
+                    hovertext=[f"entry {e:,.2f}<br>stop {s:,.2f}<br>target {tg:,.2f}" for e, s, tg in
+                               zip(cv["entry"].values[m], cv["stop"].values[m], cv["target"].values[m])], hoverinfo="text"), 1, 1)
+        sigs = cv[cv["signal"].fillna(0) != 0]
+        if len(sigs):                                                    # stop / target ladder of the newest signal
+            r = sigs.iloc[-1]
+            t0, t1 = _loc(sigs.index[-1], tz), _loc(v.index[-1] + step * 8, tz)
+            for y, col_, lab in ((r["stop"], RED, "SL"), (r["target"], GREEN, "TP")):
+                fig.add_shape(type="line", x0=t0, x1=t1, y0=y, y1=y, line=dict(color=col_, width=1.5, dash="dash"), row=1, col=1)
+                fig.add_annotation(x=t1, y=y, text=f"{lab} {y:,.2f}", showarrow=False, xanchor="left",
+                                   font=dict(size=10, color=col_), row=1, col=1)
     for name, key, color in (("SMA 20", "sma20", BLUE), ("SMA 50", "sma50", AMBER), ("EMA 21", "ema21", "#f472b6"),
                              ("EMA 200", "ema200", "#e2e8f0")):
         if name in overlays:

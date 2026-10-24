@@ -86,10 +86,11 @@ def parse_kraken_ticker(payload: dict) -> dict:
 
 
 # ------------------------------------------------------------------ Yahoo fallback
-def fetch_yahoo_candles(ticker: str, tf: str) -> pd.DataFrame:
+def fetch_yahoo_candles(ticker: str, tf: str, period: str | None = None) -> pd.DataFrame:
     import yfinance as yf
 
-    interval, period, rule = _YAHOO[tf]
+    interval, default_period, rule = _YAHOO[tf]
+    period = period or default_period
     df = yf.download(ticker, interval=interval, period=period, auto_adjust=True, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -153,3 +154,18 @@ def get_quote(ticker: str, tf: str, df: pd.DataFrame) -> tuple[dict, str]:
 def candle_seconds_left(last_open: pd.Timestamp, tf: str, now: pd.Timestamp | None = None) -> int:
     now = now or pd.Timestamp.now(tz="UTC").tz_localize(None)
     return max(0, int((last_open + pd.Timedelta(minutes=TIMEFRAMES[tf]) - now).total_seconds()))
+
+
+_HISTORY = {"5m": "58d", "15m": "58d", "30m": "58d", "1h": "700d", "4h": "700d", "1D": "5y", "1W": "10y"}
+
+
+def fetch_history(ticker: str, tf: str) -> tuple[pd.DataFrame, str]:
+    """As much history as Yahoo allows (for backtests). Kraken only serves its latest 720 candles."""
+    try:
+        df = fetch_yahoo_candles(ticker, tf, period=_HISTORY[tf])
+        if len(df) >= 300:
+            return df, f"Yahoo Finance ({len(df)} candles)"
+    except Exception:
+        pass
+    df, src = get_candles(ticker, tf, 720)
+    return df, f"{src} ({len(df)} candles, short history)"

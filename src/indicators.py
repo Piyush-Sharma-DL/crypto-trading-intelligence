@@ -146,8 +146,9 @@ def fvg_zones(df: pd.DataFrame, min_atr: float = 0.25) -> list[dict]:
             hit = np.where(h[i + 1:] >= top)[0]
         else:
             continue
-        zones.append(dict(kind=kind, i=i - 1, t0=idx[i - 1], top=float(top), bottom=float(bottom),
-                          mitigated=bool(len(hit)), t_mit=idx[i + 1 + hit[0]] if len(hit) else None))
+        zones.append(dict(kind=kind, i=i - 1, conf=i, t0=idx[i - 1], top=float(top), bottom=float(bottom),
+                          mitigated=bool(len(hit)), t_mit=idx[i + 1 + hit[0]] if len(hit) else None,
+                          i_mit=int(i + 1 + hit[0]) if len(hit) else None))
     return zones
 
 
@@ -175,8 +176,9 @@ def order_blocks(df: pd.DataFrame, swing: int = 10, disp: float = 1.5, back: int
         used.add((kind, j))
         top, bottom = (float(max(o[j], c[j])), float(min(o[j], c[j]))) if body_only else (float(h[j]), float(l[j]))
         hit = np.where(c[i + 1:] < bottom)[0] if kind == "bull_ob" else np.where(c[i + 1:] > top)[0]
-        zones.append(dict(kind=kind, i=j, t0=idx[j], top=top, bottom=bottom,
-                          mitigated=bool(len(hit)), t_mit=idx[i + 1 + hit[0]] if len(hit) else None))
+        zones.append(dict(kind=kind, i=j, conf=i, t0=idx[j], top=top, bottom=bottom,
+                          mitigated=bool(len(hit)), t_mit=idx[i + 1 + hit[0]] if len(hit) else None,
+                          i_mit=int(i + 1 + hit[0]) if len(hit) else None))
     return zones
 
 
