@@ -12,6 +12,7 @@ from src.pipeline import NAIVE, run_experiment, summarize
 from src.report import build_report
 from src.risk import apply_stop, monte_carlo, vol_target
 from src.scanner import COINS, ICON, scan
+from src.security import safe_ticker
 from src.signals import explain, generate_signals, latest_signals, to_position
 
 # ---------------------------------------------------------------- cached steps
@@ -61,7 +62,10 @@ with st.sidebar:
     take = st.slider("Take-profit (%) - 0 = off", 0, 100, 0) / 100
     vt = st.slider("Volatility target (% annual) - 0 = off", 0, 150, 0, 10) / 100
 
-ticker = custom.strip().upper() if preset == "Custom..." else preset
+ticker = safe_ticker(custom if preset == "Custom..." else preset)
+if ticker is None:
+    st.error("That is not a valid ticker. Use Yahoo format, for example LTC-USD.")
+    st.stop()
 
 # ---------------------------------------------------------------- run
 try:

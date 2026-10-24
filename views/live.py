@@ -6,11 +6,13 @@ import streamlit as st
 
 from src import indicators as I
 from src.live import TIMEFRAMES, candle_seconds_left, get_candles, get_quote
-from src.livechart import live_chart
+from src.confluence import ConfParams, confluence, status_rows
+from src.livechart import CONF, live_chart
+from src.security import esc, safe_ticker
 
 COINS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "DOT-USD"]
 IMBA, OB = "IMBA (Imbalance / FVG)", "Order Blocks"
-OVERLAYS = ["TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
+OVERLAYS = [CONF, "TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
 PANELS = ["Volume", "RSI", "MACD"]
 ZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Dubai", "Asia/Tokyo", "Australia/Sydney"]
 
@@ -47,14 +49,19 @@ with st.sidebar:
     every = st.select_slider("Refresh every (seconds)", [5, 10, 15, 30, 60], value=15)
 
     st.subheader("Indicators")
-    overlays = st.multiselect("On the chart", OVERLAYS, default=[OVERLAYS[0], IMBA, OB],
-                              help="Default: TOTT, IMBA and Order Blocks. Add or remove anything.")
+    overlays = st.multiselect("On the chart", OVERLAYS, default=[CONF],
+                              help="Default: the combined Confluence indicator (TOTT + IMBA + order blocks in one). "
+                                   "You can also switch on any single indicator.")
     panels = st.multiselect("Extra panels below", PANELS, default=[])
     with st.expander("Indicator settings"):
         st.markdown("**TOTT** (Twin Optimized Trend Tracker)")
         tott_len = st.number_input("OTT period", 2, 200, 40)
         tott_pct = st.number_input("Optimization constant (%)", 0.1, 10.0, 1.0, 0.1)
         tott_coeff = st.number_input("Twin coefficient", 0.0, 0.05, 0.001, 0.0005, format="%.4f")
+        st.markdown("**Confluence signal**")
+        c_stop = st.number_input("Stop buffer beyond the zone (x ATR)", 0.0, 3.0, 0.5, 0.1)
+        c_rr = st.number_input("Reward : risk target", 0.5, 10.0, 2.0, 0.5)
+        c_min = st.number_input("Minimum confidence (4-6)", 4, 6, 4)
         st.markdown("**IMBA** (fair value gaps)")
         fvg_min = st.number_input("Minimum gap size (x ATR)", 0.0, 3.0, 0.25, 0.05)
         st.markdown("**Order blocks**")
@@ -65,12 +72,15 @@ with st.sidebar:
         show_mit = st.checkbox("Also show mitigated zones", False)
         show_old = st.checkbox("Show zones that formed before the visible candles", False)
 
-ticker = custom.strip().upper() if preset == "Custom..." else preset
+ticker = safe_ticker(custom if preset == "Custom..." else preset)
+if ticker is None:
+    st.error("That is not a valid ticker. Use Yahoo format, for example LTC-USD.")
+    st.stop()
 cfg = dict(tott_length=int(tott_len), tott_percent=float(tott_pct), tott_coeff=float(tott_coeff),
            fvg_min_atr=float(fvg_min), ob_swing=int(ob_swing), ob_disp=float(ob_disp), ob_body=(ob_zone == "Candle body"),
            max_zones=int(max_zones))
 
-st.markdown(f"<p class='hero'>📡 {ticker} · Live</p>", unsafe_allow_html=True)
+st.markdown(f"<p class='hero'>📡 {esc(ticker)} · Live</p>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- the live panel (re-runs on its own timer)
@@ -103,18 +113,26 @@ def live_panel():
                + f" · chart times in {tz}")
 
     ind = I.compute_all(df, TIMEFRAMES[tf], cfg)
+    closed = df.iloc[:-1]                                             # signals use closed candles only (no repainting)
+    cp = ConfParams(tott_length=cfg["tott_length"], tott_percent=cfg["tott_percent"], tott_coeff=cfg["tott_coeff"],
+                    fvg_min_atr=cfg["fvg_min_atr"], ob_swing=cfg["ob_swing"], ob_disp=cfg["ob_disp"], ob_body=cfg["ob_body"],
+                    stop_atr=float(c_stop), rr=float(c_rr), min_conf=int(c_min))
+    conf_res = confluence(closed, cp)
+    conf_full = conf_res.reindex(df.index)
+    conf_full["signal"] = conf_full["signal"].fillna(0)
     zones = []
-    if IMBA in overlays:
+    if IMBA in overlays or CONF in overlays:
         zones += I.keep_recent(ind["fvg"], cfg["max_zones"], show_mit)
-    if OB in overlays:
+    if OB in overlays or CONF in overlays:
         zones += I.keep_recent(ind["ob"], cfg["max_zones"], show_mit)
     fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}",
-                     show_old_zones=show_old)
+                     show_old_zones=show_old, conf=conf_full)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
 
     left, right = st.columns([3, 2])
     with left:
         snap, summ = I.snapshot(df, ind)
+        snap = pd.concat([status_rows(closed, conf_res, cp), snap], ignore_index=True)
         st.markdown(f"**Live indicator tracker** · 🟢 {summ['bull']} bullish · 🔴 {summ['bear']} bearish · ⚪ {summ['neutral']} neutral")
         st.dataframe(snap, hide_index=True, use_container_width=True)
     with right:
