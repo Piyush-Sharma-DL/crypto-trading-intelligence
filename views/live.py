@@ -1,5 +1,5 @@
 """Live Chart page: real-time price, multi-timeframe candles and user-selectable indicators.
-Default chart indicators: TOTT, IMBA (imbalance / fair value gaps) and order blocks."""
+Default chart layers: the combined Confluence indicator and news markers. Owners also get their paper bot on the chart."""
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -7,13 +7,21 @@ import streamlit as st
 from src import indicators as I
 from src.live import TIMEFRAMES, candle_seconds_left, get_candles, get_quote
 from src.confluence import ConfParams, confluence, status_rows
-from src.livechart import CONF, live_chart
-from src.security import esc, safe_ticker
+from src import auth
+from src import news as N
+from src.bot import kill_switch, run_cycle
+from src.livechart import CONF, NEWS, live_chart
+from src.newsui import mood_dot, render_headlines
+from src.paper_engine import BotConfig, new_state
+from src.paperstore import Store
+from src.security import esc
+from src.ui import asset_picker
 
 COINS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "DOT-USD"]
 IMBA, OB = "IMBA (Imbalance / FVG)", "Order Blocks"
-OVERLAYS = [CONF, "TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
+OVERLAYS = [CONF, NEWS, "TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
 PANELS = ["Volume", "RSI", "MACD"]
+BOT_TFS = ["5m", "15m", "30m", "1h", "4h"]
 ZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Dubai", "Asia/Tokyo", "Australia/Sydney"]
 
 
@@ -28,6 +36,51 @@ def quote(ticker, tf, df):
     return get_quote(ticker, tf, df)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def news_data():
+    return N.fetch_news(max_age_hours=72)
+
+
+def bot_panel(store: Store, bot_id: str, ticker: str, tf: str, price: float) -> None:
+    """Owner-only control card for the paper bot that trades this chart (fake money)."""
+    st.markdown(f"#### 🤖 Paper bot on this chart · `{bot_id}` · owner only, fake money")
+    if tf not in BOT_TFS:
+        st.caption("Bots run on 5m, 15m, 30m, 1h or 4h candles. Pick one of those on the left.")
+        return
+    rec = store.get(bot_id)
+    if rec is None:
+        st.caption("No bot on this chart yet. It starts with 10,000 fake dollars, trades the Confluence signal on closed candles only, "
+                   "and has a daily-loss limit and a kill switch.")
+        if st.button("➕ Create paper bot for this chart", key=f"mk_{bot_id}"):
+            cfg0 = BotConfig(symbol=ticker, timeframe=tf)
+            store.create(bot_id, cfg0.to_dict(), new_state(cfg0))
+            rec = store.get(bot_id)
+        else:
+            return
+    cfg, s = BotConfig.from_dict(rec["cfg"]), rec["state"]
+    c1, c2, c3 = st.columns(3)
+    if c1.button("⏸ Pause bot" if s["enabled"] else "▶ Resume bot", key=f"tg_{bot_id}", use_container_width=True):
+        s["enabled"] = not s["enabled"]
+        if s["enabled"]:
+            s["last_bar"] = None                                       # re-arm: never trade candles missed while paused
+            if s["halt"] == "manual kill switch":
+                s["halt"] = None
+        store.save_state(bot_id, s)
+        store.log(bot_id, "info", "Resumed" if s["enabled"] else "Paused")
+    if c2.button("🛑 Kill switch", key=f"ks_{bot_id}", use_container_width=True, help="Close any open position and stop the bot"):
+        kill_switch(store, bot_id, price)
+    c3.page_link("views/bot.py", label="Open Bot Desk →")
+    rec = store.get(bot_id)
+    cfg, s = BotConfig.from_dict(rec["cfg"]), rec["state"]
+    pos = s["position"]
+    k = st.columns(4)
+    k[0].metric("Equity (fake)", f"${s['equity']:,.2f}", f"{(s['equity'] / cfg.start_equity - 1) * 100:+.2f}% since start")
+    k[1].metric("Status", f"🛑 {s['halt']}" if s["halt"] else ("▶ Running" if s["enabled"] else "⏸ Paused"))
+    k[2].metric("Position", ("LONG" if pos["side"] == 1 else "SHORT") if pos else "none")
+    k[3].metric("Unrealised", f"{pos['side'] * (price - pos['entry']) * pos['qty']:+,.2f}" if pos else "n/a")
+    st.dataframe(store.events(bot_id, 5), hide_index=True, use_container_width=True)
+
+
 def countdown(sec: int) -> str:
     d, rem = divmod(sec, 86400)
     h, rem = divmod(rem, 3600)
@@ -38,8 +91,7 @@ def countdown(sec: int) -> str:
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.title("📡 Live controls")
-    preset = st.selectbox("Asset", COINS + ["Custom..."])
-    custom = st.text_input("Custom ticker (Yahoo format, e.g. LTC-USD)", "LTC-USD")
+    ticker = asset_picker(COINS)
     tf = st.radio("Candle size", list(TIMEFRAMES), index=1, horizontal=True)
     bars = st.slider("Candles on chart", 50, 400, 150, 10)
     tz = st.selectbox("Display time zone", ZONES)
@@ -49,8 +101,8 @@ with st.sidebar:
     every = st.select_slider("Refresh every (seconds)", [5, 10, 15, 30, 60], value=15)
 
     st.subheader("Indicators")
-    overlays = st.multiselect("On the chart", OVERLAYS, default=[CONF],
-                              help="Default: the combined Confluence indicator (TOTT + IMBA + order blocks in one). "
+    overlays = st.multiselect("On the chart", OVERLAYS, default=[CONF, NEWS],
+                              help="Default: the combined Confluence indicator (TOTT + IMBA + order blocks in one) and news markers. "
                                    "You can also switch on any single indicator.")
     panels = st.multiselect("Extra panels below", PANELS, default=[])
     with st.expander("Indicator settings"):
@@ -72,7 +124,6 @@ with st.sidebar:
         show_mit = st.checkbox("Also show mitigated zones", False)
         show_old = st.checkbox("Show zones that formed before the visible candles", False)
 
-ticker = safe_ticker(custom if preset == "Custom..." else preset)
 if ticker is None:
     st.error("That is not a valid ticker. Use Yahoo format, for example LTC-USD.")
     st.stop()
@@ -112,6 +163,32 @@ def live_panel():
                + (f"auto-refresh every {every}s" if auto else "auto-refresh off")
                + f" · chart times in {tz}")
 
+    # ---- news (public) and the owner's bot (private): both are optional layers on the chart
+    ndf, nstat = news_data()
+    base = ticker.split("-")[0]
+    asset_news = N.for_asset(ndf, base)
+    utc_now = now.tz_localize(None)
+    hot = asset_news[(asset_news["time"] >= utc_now - pd.Timedelta(hours=2)) & (asset_news["impact"] == 2)]
+    if len(hot):
+        st.warning(f"⚠️ High-impact headline in the last 2 hours: {N.md_escape(hot.iloc[0]['title'])} "
+                   f"({N.md_escape(hot.iloc[0]['source'])}). Expect sudden moves.")
+
+    def news_for_guard():
+        if nstat and all(v.startswith("failed") for v in nstat.values()):
+            raise RuntimeError("all news sources unreachable")
+        return ndf
+
+    owner = auth.is_owner()
+    store, bot_overlay = None, None
+    if owner and tf in BOT_TFS:
+        store = Store()
+        rec = store.get(f"{ticker}@{tf}")
+        if rec and rec["state"]["enabled"]:
+            run_cycle(store, f"{ticker}@{tf}", fetch=lambda s_, t_, n_: (df, source), news_fetch=news_for_guard)
+            rec = store.get(f"{ticker}@{tf}")
+        if rec:
+            bot_overlay = {"trades": store.trades(f"{ticker}@{tf}"), "position": rec["state"]["position"]}
+
     ind = I.compute_all(df, TIMEFRAMES[tf], cfg)
     closed = df.iloc[:-1]                                             # signals use closed candles only (no repainting)
     cp = ConfParams(tott_length=cfg["tott_length"], tott_percent=cfg["tott_percent"], tott_coeff=cfg["tott_coeff"],
@@ -126,13 +203,21 @@ def live_panel():
     if OB in overlays or CONF in overlays:
         zones += I.keep_recent(ind["ob"], cfg["max_zones"], show_mit)
     fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}",
-                     show_old_zones=show_old, conf=conf_full)
+                     show_old_zones=show_old, conf=conf_full,
+                     news=asset_news, bot=bot_overlay)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
+
+    if owner:
+        bot_panel(store or Store(), f"{ticker}@{tf}", ticker, tf, price)
 
     left, right = st.columns([3, 2])
     with left:
         snap, summ = I.snapshot(df, ind)
-        snap = pd.concat([status_rows(closed, conf_res, cp), snap], ignore_index=True)
+        day_news = asset_news[asset_news["time"] >= utc_now - pd.Timedelta(hours=24)]
+        mm = N.mood(day_news)
+        news_row = pd.DataFrame([{"Indicator": f"News mood ({base}, 24h)", "Value": f"{mm['score']:+.2f}",
+                                  "Reading": f"{mood_dot(mm['score'])} {mm['label']} · {mm['n']} headlines · {mm['high']} high-impact"}])
+        snap = pd.concat([status_rows(closed, conf_res, cp), news_row, snap], ignore_index=True)
         st.markdown(f"**Live indicator tracker** · 🟢 {summ['bull']} bullish · 🔴 {summ['bear']} bearish · ⚪ {summ['neutral']} neutral")
         st.dataframe(snap, hide_index=True, use_container_width=True)
     with right:
@@ -141,6 +226,9 @@ def live_panel():
         zt["Distance %"] = zt["Distance %"].round(2)
         st.dataframe(zt, hide_index=True, use_container_width=True)
     st.caption("Indicator values include the candle that is still forming, so they can change until it closes.")
+    with st.expander(f"📰 Latest {base} headlines (synced with this chart)"):
+        render_headlines(asset_news, 6, utc_now)
+        st.page_link("views/news.py", label="Open the full News dashboard →")
 
 
 live_panel()

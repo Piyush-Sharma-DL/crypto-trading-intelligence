@@ -4,11 +4,13 @@ import streamlit as st
 
 from src import auth
 from src import botcharts as bc
+from src import news as N
 from src.bot import kill_switch, params_for, run_cycle
 from src.confluence import confluence
 from src.live import fetch_history, get_candles
 from src.paper_engine import BotConfig, new_state, run_backtest
 from src.paperstore import Store
+from src.newsui import mood_dot, render_headlines
 from src.security import esc, safe_ticker
 
 auth.require_owner()                                  # nothing below runs for anyone else
@@ -20,6 +22,19 @@ TFS = ["5m", "15m", "30m", "1h", "4h"]
 @st.cache_data(ttl=8, show_spinner=False)
 def candles(symbol, tf, n):
     return get_candles(symbol, tf, n)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def news_data():
+    return N.fetch_news(max_age_hours=72)
+
+
+def guard_news():
+    """News for the bot's guard. Raises if every source is down, so the bot fails safe instead of assuming 'no news'."""
+    df, status = news_data()
+    if status and all(v.startswith("failed") for v in status.values()):
+        raise RuntimeError("all news sources unreachable")
+    return df
 
 
 with st.sidebar:
@@ -47,7 +62,10 @@ def config_widgets(key: str, d: BotConfig):
     dloss = c3.number_input("Daily loss limit (%)", 0.5, 20.0, d.daily_loss_pct, 0.5, key=f"{key}_dl")
     mdd = c3.number_input("Max drawdown kill switch (%)", 2.0, 50.0, d.max_drawdown_pct, 1.0, key=f"{key}_dd")
     mtd = c3.number_input("Max trades per day", 1, 50, d.max_trades_per_day, key=f"{key}_mt")
-    return dict(start_equity=equity, risk_pct=risk, rr=rr, stop_atr=stop_atr, min_conf=int(min_conf), allow_short=short,
+    ng = c3.checkbox("News guard: skip NEW trades after a high-impact headline", d.news_guard, key=f"{key}_ng",
+                     help="If the news cannot be checked, the bot does not open new trades (fails safe).")
+    ngm = c3.number_input("News guard window (minutes)", 15, 480, d.news_guard_minutes, 15, key=f"{key}_ngm")
+    return dict(news_guard=ng, news_guard_minutes=int(ngm), start_equity=equity, risk_pct=risk, rr=rr, stop_atr=stop_atr, min_conf=int(min_conf), allow_short=short,
                 fee_pct=fee, slippage_pct=slip, daily_loss_pct=dloss, max_drawdown_pct=mdd, max_trades_per_day=int(mtd))
 
 
@@ -88,6 +106,27 @@ with tab_run:
                    "have fully closed.")
         rec = store.get(sel)
         cfg, state = BotConfig.from_dict(rec["cfg"]), rec["state"]
+        st.session_state["shared_asset"] = cfg.symbol                  # the Live Chart and News pages follow the selected bot
+        lc = st.columns(2)
+        lc[0].page_link("views/live.py", label=f"📡 See {sel} on the Live Chart →")
+        lc[1].page_link("views/news.py", label=f"📰 {cfg.symbol.split('-')[0]} news & market →")
+        with st.expander(f"📰 Market pulse for {cfg.symbol}"):
+            ndf, nstat = news_data()
+            base = cfg.symbol.split("-")[0]
+            utc_now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+            an = N.for_asset(ndf, base)
+            mm = N.mood(an[an["time"] >= utc_now - pd.Timedelta(hours=24)]) if len(an) else N.mood(an)
+            st.markdown(f"**{base} headline mood (24h):** {mood_dot(mm['score'])} {mm['score']:+.2f} · {mm['label']} · "
+                        f"{mm['n']} headlines · {mm['high']} high-impact")
+            if cfg.news_guard:
+                try:
+                    blocked, why = N.news_risk(guard_news(), cfg.symbol, utc_now, cfg.news_guard_minutes)
+                    st.markdown("🛡 **News guard:** " + (f"BLOCKING new trades now. {N.md_escape(why)}" if blocked else "clear, new trades allowed."))
+                except Exception as exc:
+                    st.markdown(f"🛡 **News guard:** cannot check the news ({N.md_escape(str(exc))}), so new trades are blocked.")
+            else:
+                st.caption("News guard is off for this bot (turn it on in Edit risk settings).")
+            render_headlines(an, 6, utc_now)
 
         b1, b2, b3, b4 = st.columns(4)
         if b1.button("▶ Resume" if not state["enabled"] else "⏸ Pause", use_container_width=True):
@@ -132,7 +171,7 @@ with tab_run:
             if auto:
                 for b in store.list_bots():
                     if b["state"]["enabled"]:
-                        run_cycle(store, b["bot_id"], fetch=candles)
+                        run_cycle(store, b["bot_id"], fetch=candles, news_fetch=guard_news)
             r = store.get(bot_id)
             if r is None:
                 return
