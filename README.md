@@ -10,17 +10,25 @@ python -m venv .venv && .venv\Scripts\activate          # Mac/Linux: source .ven
 pip install -r requirements-lstm.txt                    # includes PyTorch for the LSTM
 streamlit run app.py                                    # or double-click Start-Dashboard.bat (Windows)
 ```
-Tests (no internet needed): `python -m tests.confluence_test`, `python -m tests.engine_test`, `python -m tests.bot_auth_test`, `python -m tests.smoke_test`, `python -m tests.live_test`, `python -m tests.ui_smoke` (the last also runs the indicator tests).
+Tests (no internet needed): `python -m tests.news_test`, `python -m tests.news_guard_test`, `python -m tests.confluence_test`, `python -m tests.engine_test`, `python -m tests.bot_auth_test`, `python -m tests.smoke_test`, `python -m tests.live_test`, `python -m tests.ui_smoke` (the last also runs the indicator tests).
 
 ## Owner-only Bot Desk (new)
 The site is public, but the **Bot Desk** appears only after you sign in (Google account or password). See **OWNER_SETUP.md** and **SECURITY.md**.
 It runs **paper-trading bots (simulated money only)** on the combined **Confluence** indicator (TOTT trend + order-block / IMBA retest, one signal with stop and target), with fees, slippage, a daily-loss limit and a max-drawdown kill switch.
 `python -m src.bot --loop` keeps the bots running on your own computer. No exchange is connected.
 
+## News, and your bot on the chart (new)
+- Headlines appear as markers on the Live Chart (star = high-impact, green/red = positive/negative wording) and a banner warns about fresh high-impact news.
+- The tracker shows a **News mood** row for the selected coin. Choosing a coin on one page selects it on the others, and the Bot Desk follows the selected bot.
+- **Owners** see their paper bot on the Live Chart: entry/exit markers, the open trade's stop and target lines, and a card to create, pause or kill the bot.
+- Optional per-bot **news guard**: skip *new* trades for N minutes after a high-impact headline about that coin or the whole market. If the news cannot be checked, it blocks (fails safe).
+- Headline mood is a simple keyword rule on titles: a description of the wording, not a forecast.
+
 ## Pages
 | Page | What it does |
 |---|---|
 | 📡 **Live Chart** | Real-time price, candles at 5m / 15m / 30m / 1h / 4h / 1D / 1W, auto-refresh, user-selectable indicators, live indicator tracker, nearest imbalance / order-block zones |
+| 📰 **News & Market** | Crypto headlines from public RSS feeds, headline mood, high-impact flags, Fear & Greed, BTC dominance, S&P 500 and dollar index. Synced with the Live Chart's asset |
 | 🤖 **Bot Desk** (owner only) | Paper bots, trades, equity curve, kill switch, strategy backtest |
 | 🧪 **Forecast Lab** | Walk-forward ML forecasts, significance tests, signals, backtest, scanner, live track record |
 

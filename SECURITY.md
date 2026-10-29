@@ -14,6 +14,11 @@
 - Bot history is stored in `data/private/bot.db`, which is git-ignored. Nothing about visitors is stored.
 - Everything a visitor can type (tickers) is validated before use and escaped before display.
 
+## News content is untrusted
+Headlines come from public RSS feeds, so everything in them is treated as hostile text: feeds with DTD/entity tricks are rejected, HTML is stripped,
+only http(s) links are kept, titles are escaped before display (page and chart tooltips), and each source is fetched with a timeout and a size cap.
+The bot's optional news guard can only make it *more* cautious (block new entries), never place trades.
+
 ## Honest limits
 - This is a free hosting tier: no firewall, no audit log, and the disk is wiped on restart (bot history on the website does not last; run the bot on your own computer for a lasting record).
 - The code repository is **public**, so anyone can read the strategy rules. If that matters, make the GitHub repository **private** (Streamlit Cloud can deploy private repositories).

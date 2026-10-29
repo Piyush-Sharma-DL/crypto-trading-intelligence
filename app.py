@@ -24,6 +24,7 @@ st.markdown("""
 
 pages = [
     st.Page("views/live.py", title="Live Chart", icon="📡", default=True),
+    st.Page("views/news.py", title="News & Market", icon="📰"),
     st.Page("views/forecast.py", title="Forecast Lab", icon="🧪"),
 ]
 # the private page is only registered for the signed-in owner; everyone else gets a sign-in page instead
