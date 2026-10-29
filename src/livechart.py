@@ -1,12 +1,15 @@
 """Plotly figure for the live chart: candles + user-selected overlays and panels."""
 from __future__ import annotations
 
+import html
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 CONF = "Confluence (TOTT + IMBA + OB)"
+NEWS = "News markers"
 GREEN, RED, BLUE, AMBER, VIOLET = "#22c55e", "#ef4444", "#38bdf8", "#f59e0b", "#a78bfa"
 ZONE_STYLE = {  # fill, border, label
     "bull_fvg": ("rgba(34,197,94,.16)", "rgba(34,197,94,.55)", "IMBA ↑"),
@@ -25,7 +28,8 @@ def _loc(x, tz: str):
 
 def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: list[str], ind: dict,
                zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "",
-               show_old_zones: bool = False, conf: pd.DataFrame | None = None) -> go.Figure:
+               show_old_zones: bool = False, conf: pd.DataFrame | None = None,
+               news: pd.DataFrame | None = None, bot: dict | None = None) -> go.Figure:
     v = df.iloc[-n:]
     x = _loc(v.index, tz)
     step = pd.Timedelta(minutes=tf_minutes)
@@ -94,6 +98,43 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
             t0, t1 = _loc(sigs.index[-1], tz), _loc(v.index[-1] + step * 8, tz)
             for y, col_, lab in ((r["stop"], RED, "SL"), (r["target"], GREEN, "TP")):
                 fig.add_shape(type="line", x0=t0, x1=t1, y0=y, y1=y, line=dict(color=col_, width=1.5, dash="dash"), row=1, col=1)
+                fig.add_annotation(x=t1, y=y, text=f"{lab} {y:,.2f}", showarrow=False, xanchor="left",
+                                   font=dict(size=10, color=col_), row=1, col=1)
+    if news is not None and NEWS in overlays and len(news):               # headlines on the candle they were published in
+        nv = news[(news["time"] >= v.index[0]) & (news["time"] < v.index[-1] + step)].head(25)
+        if len(nv):
+            at = np.clip(v.index.searchsorted(nv["time"], side="right") - 1, 0, len(v) - 1)
+            hi = nv["impact"].values == 2
+            fig.add_trace(go.Scatter(
+                x=x[at], y=v["High"].values[at] * 1.0015, mode="markers", name="News",
+                marker=dict(symbol=["star" if h else "diamond" for h in hi], size=[14 if h else 9 for h in hi],
+                            color=[GREEN if s > .08 else RED if s < -.08 else "#94a3b8" for s in nv["sentiment"]],
+                            line=dict(width=1, color="white")),
+                hovertext=[f"<b>{html.escape(str(t))}</b><br>{html.escape(str(s))} · mood {m:+.2f}"
+                           for t, s, m in zip(nv["title"], nv["source"], nv["sentiment"])], hoverinfo="text"), 1, 1)
+    if bot:                                                               # the owner's paper bot, drawn on the chart
+        tr = bot.get("trades")
+        if tr is not None and len(tr):
+            t_in, t_out = pd.to_datetime(tr["entry_time"]), pd.to_datetime(tr["exit_time"])
+            m_in = (t_in >= v.index[0]).values
+            if m_in.any():
+                long_ = (tr["side"] == "LONG").values
+                fig.add_trace(go.Scatter(
+                    x=_loc(pd.DatetimeIndex(t_in[m_in]), tz), y=tr["entry"].values[m_in], mode="markers", name="Bot entry",
+                    marker=dict(symbol=["triangle-up" if s else "triangle-down" for s in long_[m_in]], size=12, color=BLUE,
+                                line=dict(width=1.5, color="white"))), 1, 1)
+            m_out = (t_out >= v.index[0]).values
+            if m_out.any():
+                fig.add_trace(go.Scatter(
+                    x=_loc(pd.DatetimeIndex(t_out[m_out]), tz), y=tr["exit"].values[m_out], mode="markers+text", name="Bot exit",
+                    text=[f"{r:+.1f}R" for r in tr["r_multiple"].values[m_out]], textposition="top center",
+                    marker=dict(symbol="x", size=11, line=dict(width=2),
+                                color=[GREEN if p > 0 else RED for p in tr["pnl"].values[m_out]])), 1, 1)
+        p = bot.get("position")
+        if p:
+            t0, t1 = _loc(pd.Timestamp(p["opened"]), tz), _loc(v.index[-1] + step * 8, tz)
+            for y, col_, lab in ((p["entry"], BLUE, "BOT ENTRY"), (p["stop"], RED, "BOT SL"), (p["target"], GREEN, "BOT TP")):
+                fig.add_shape(type="line", x0=min(t0, t1), x1=t1, y0=y, y1=y, line=dict(color=col_, width=1.5, dash="dot"), row=1, col=1)
                 fig.add_annotation(x=t1, y=y, text=f"{lab} {y:,.2f}", showarrow=False, xanchor="left",
                                    font=dict(size=10, color=col_), row=1, col=1)
     for name, key, color in (("SMA 20", "sma20", BLUE), ("SMA 50", "sma50", AMBER), ("EMA 21", "ema21", "#f472b6"),

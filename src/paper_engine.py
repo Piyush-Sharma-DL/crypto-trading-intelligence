@@ -31,6 +31,8 @@ class BotConfig:
     daily_loss_pct: float = 3.0         # halt new trades (and flatten) after losing this much in a UTC day
     max_drawdown_pct: float = 15.0      # kill switch: flatten and stop the bot
     max_trades_per_day: int = 6
+    news_guard: bool = False           # skip NEW entries shortly after a high-impact headline (fails safe)
+    news_guard_minutes: int = 90
 
     def to_dict(self) -> dict:
         return asdict(self)

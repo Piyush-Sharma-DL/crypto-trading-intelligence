@@ -12,6 +12,7 @@ import pandas as pd
 
 from .confluence import ConfParams, confluence
 from .live import TIMEFRAMES, get_candles
+from .news import fetch_news, news_risk
 from .paper_engine import BotConfig, _close_position, step
 from .paperstore import Store
 
@@ -24,7 +25,22 @@ def closed_candles(df: pd.DataFrame, tf: str, now: pd.Timestamp) -> pd.DataFrame
     return df[(df.index + pd.Timedelta(minutes=TIMEFRAMES[tf])) <= now]
 
 
-def run_cycle(store: Store, bot_id: str, fetch=None, now: pd.Timestamp | None = None, min_history: int = 150) -> dict:
+def _news_guard(cfg: BotConfig, news_fetch, now: pd.Timestamp) -> tuple[bool, str]:
+    """True = block new entries. If the news cannot be checked, block (fail safe)."""
+    try:
+        if news_fetch is not None:
+            df = news_fetch()
+        else:
+            df, status = fetch_news(max_age_hours=6, now=now)
+            if status and all(v.startswith("failed") for v in status.values()):
+                raise RuntimeError("all news sources unreachable")
+    except Exception as exc:
+        return True, f"news check failed ({str(exc)[:60]}), failing safe"
+    return news_risk(df, cfg.symbol, now, cfg.news_guard_minutes)
+
+
+def run_cycle(store: Store, bot_id: str, fetch=None, now: pd.Timestamp | None = None, min_history: int = 150,
+              news_fetch=None) -> dict:
     rec = store.get(bot_id)
     if rec is None:
         return {"bot": bot_id, "status": "missing", "new_bars": 0}
@@ -58,9 +74,16 @@ def run_cycle(store: Store, bot_id: str, fetch=None, now: pd.Timestamp | None = 
                                   f"but only the newest candle can open a new one.")
     for i in new:
         ts, r = closed.index[i], res.iloc[i]
+        allow = (i == new[-1])
+        if allow and cfg.news_guard and int(r["signal"]) != 0 and state["position"] is None and state["enabled"]:
+            blocked, why = _news_guard(cfg, news_fetch, now)
+            if blocked:
+                allow = False
+                store.log(bot_id, "warn", f"[{ts:%Y-%m-%d %H:%M}] News guard blocked a "
+                                          f"{'LONG' if int(r['signal']) == 1 else 'SHORT'} signal: {why}")
         state, events, trades = step(state, cfg, ts, *closed.iloc[i][["Open", "High", "Low", "Close"]].tolist(),
                                      signal=int(r["signal"]), stop=r["stop"], target=r["target"], conf=int(r["conf"]),
-                                     trend=int(r["trend"]), allow_entry=(i == new[-1]))
+                                     trend=int(r["trend"]), allow_entry=allow)
         for level, msg in events:
             store.log(bot_id, level, f"[{ts:%Y-%m-%d %H:%M}] {msg}")
         for t in trades:
