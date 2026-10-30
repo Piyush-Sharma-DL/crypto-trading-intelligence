@@ -10,7 +10,11 @@ from plotly.subplots import make_subplots
 
 CONF = "Confluence (TOTT + IMBA + OB)"
 NEWS = "News markers"
+IMBA_ALGO = "IMBA ALGO (Fib trend)"
 GREEN, RED, BLUE, AMBER, VIOLET = "#22c55e", "#ef4444", "#38bdf8", "#f59e0b", "#a78bfa"
+# TradingView-style palette
+BG, GRID, TXT, UP, DN, CROSS = "#131722", "#2a2e39", "#b2b5be", "#26a69a", "#ef5350", "#9598a1"
+FONT = "Trebuchet MS, Roboto, Ubuntu, sans-serif"
 ZONE_STYLE = {  # fill, border, label
     "bull_fvg": ("rgba(34,197,94,.16)", "rgba(34,197,94,.55)", "IMBA ↑"),
     "bear_fvg": ("rgba(239,68,68,.16)", "rgba(239,68,68,.55)", "IMBA ↓"),
@@ -29,20 +33,28 @@ def _loc(x, tz: str):
 def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: list[str], ind: dict,
                zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "",
                show_old_zones: bool = False, conf: pd.DataFrame | None = None,
-               news: pd.DataFrame | None = None, bot: dict | None = None) -> go.Figure:
+               news: pd.DataFrame | None = None, bot: dict | None = None, imba: pd.DataFrame | None = None,
+               imba_ladder: dict | None = None, title: str = "", source: str = "", show_volume: bool = True) -> go.Figure:
     v = df.iloc[-n:]
     x = _loc(v.index, tz)
     step = pd.Timedelta(minutes=tf_minutes)
     n_pan = len(panels)
-    fig = make_subplots(rows=1 + n_pan, cols=1, shared_xaxes=True, vertical_spacing=0.025,
-                        row_heights=[0.62] + [0.38 / n_pan] * n_pan if n_pan else [1.0])
+    fig = make_subplots(rows=1 + n_pan, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                        row_heights=[0.62] + [0.38 / n_pan] * n_pan if n_pan else [1.0],
+                        specs=[[{"secondary_y": True}]] + [[{}] for _ in range(n_pan)])
 
     def line(s, name, color, width=1.3, dash=None, row=1):
         fig.add_trace(go.Scatter(x=x, y=s.reindex(v.index).values, name=name, mode="lines",
                                  line=dict(color=color, width=width, dash=dash)), row, 1)
 
     fig.add_trace(go.Candlestick(x=x, open=v.Open, high=v.High, low=v.Low, close=v.Close, name="Price",
-                                 increasing_line_color=GREEN, decreasing_line_color=RED), 1, 1)
+                                 increasing=dict(line=dict(color=UP, width=1), fillcolor=UP),
+                                 decreasing=dict(line=dict(color=DN, width=1), fillcolor=DN)), 1, 1)
+    if show_volume:                                                       # TradingView-style: faint volume bars along the bottom
+        fig.add_trace(go.Bar(x=x, y=v["Volume"].values, name="Volume", showlegend=False, hoverinfo="skip",
+                             marker_color=np.where(v["Close"] >= v["Open"], "rgba(38,166,154,.28)", "rgba(239,83,80,.28)")),
+                      1, 1, secondary_y=True)
+        fig.update_yaxes(range=[0, float(v["Volume"].max() or 1) * 4.5], showgrid=False, visible=False, secondary_y=True, row=1, col=1)
 
     # ---- zones first so they sit behind the lines
     shown = []
@@ -137,6 +149,31 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
                 fig.add_shape(type="line", x0=min(t0, t1), x1=t1, y0=y, y1=y, line=dict(color=col_, width=1.5, dash="dot"), row=1, col=1)
                 fig.add_annotation(x=t1, y=y, text=f"{lab} {y:,.2f}", showarrow=False, xanchor="left",
                                    font=dict(size=10, color=col_), row=1, col=1)
+    if imba is not None and IMBA_ALGO in overlays:
+        r = imba.reindex(v.index)
+        for d_, col_, nm in ((1, UP, "IMBA trend (long)"), (-1, DN, "IMBA trend (short)")):
+            fig.add_trace(go.Scatter(x=x, y=r["f5"].where(r["trend"] == d_).values, name=nm, mode="lines",
+                                     line=dict(color=col_, width=3)), 1, 1)
+        for col_, nm in (("f236", "IMBA 23.6%"), ("f786", "IMBA 78.6%")):
+            fig.add_trace(go.Scatter(x=x, y=r[col_].values, name=nm, mode="lines",
+                                     line=dict(color="rgba(148,163,184,.55)", width=1, dash="dot")), 1, 1)
+        for side, nm, col_, sym, ref, mult, pos in ((1, "IMBA LONG", UP, "triangle-up", "Low", 0.9975, "bottom center"),
+                                                    (-1, "IMBA SHORT", DN, "triangle-down", "High", 1.0025, "top center")):
+            m = (r["signal"] == side).values
+            if m.any():
+                fig.add_trace(go.Scatter(x=x[m], y=(v[ref].values * mult)[m], mode="markers+text", name=nm,
+                                         text=[nm] * int(m.sum()), textposition=pos, textfont=dict(size=10, color=col_),
+                                         marker=dict(symbol=sym, size=13, color=col_, line=dict(width=1, color="white"))), 1, 1)
+        if imba_ladder:                                                   # entry / stop / TP1-4 of the newest IMBA signal
+            L = imba_ladder
+            t0, t1 = max(_loc(L["t0"], tz), x[0]), _loc(v.index[-1] + step * 8, tz)
+            rows = [(L["entry"], "#9598a1", "solid", "ENTRY", "")] + \
+                   [(L["sl"], RED, "dot", "SL", " ✖" if L["sl_hit"] else "")] + \
+                   [(p, UP, "dot", f"TP{k}", " ✔" if hit else "") for k, p, hit in L["tps"]]
+            for y, col_, dash, lab, mark in rows:
+                fig.add_shape(type="line", x0=t0, x1=t1, y0=y, y1=y, line=dict(color=col_, width=1.3, dash=dash), row=1, col=1)
+                fig.add_annotation(x=t1, y=y, text=f"{lab} {y:,.2f}{mark}", showarrow=False, xanchor="left",
+                                   font=dict(size=10, color=col_), row=1, col=1)
     for name, key, color in (("SMA 20", "sma20", BLUE), ("SMA 50", "sma50", AMBER), ("EMA 21", "ema21", "#f472b6"),
                              ("EMA 200", "ema200", "#e2e8f0")):
         if name in overlays:
@@ -154,8 +191,11 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
             fig.add_trace(go.Scatter(x=x, y=st["line"].where(st["dir"] == d_).values, name=name, mode="lines",
                                      line=dict(color=color, width=1.5)), 1, 1)
 
-    fig.add_hline(y=price, line=dict(color=AMBER, width=1, dash="dot"), annotation_text=f"{price:,.2f}",
-                  annotation_position="right", annotation_font=dict(color=AMBER), row=1, col=1)
+    last_up = float(v["Close"].iloc[-1]) >= float(v["Open"].iloc[-1])
+    tag = UP if last_up else DN                                           # coloured last-price tag, like TradingView
+    fig.add_hline(y=price, line=dict(color=tag, width=1, dash="dot"), annotation_text=f"{price:,.2f}",
+                  annotation_position="right", annotation_font=dict(color="white", size=11), annotation_bgcolor=tag,
+                  row=1, col=1)
 
     # ---- panels
     for k, name in enumerate(panels, start=2):
@@ -174,8 +214,32 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
             line(m["macd"], "MACD", BLUE, 1.2, row=k)
             line(m["signal"], "Signal", AMBER, 1.2, row=k)
 
-    fig.update_layout(template="plotly_dark", height=560 + 150 * n_pan, margin=dict(l=10, r=70, t=10, b=10),
-                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis_rangeslider_visible=False,
-                      legend=dict(orientation="h", y=1.04), dragmode="pan", uirevision=uirevision, hovermode="x")
-    fig.update_yaxes(side="right", range=[y_lo, y_hi], row=1, col=1)
+    for k, name in enumerate(panels, start=2):                              # panel titles, top-left inside each panel
+        fig.add_annotation(text=f"<b>{name}</b>", xref="x domain", yref="y domain", x=0.004, y=0.96, showarrow=False,
+                           xanchor="left", yanchor="top", font=dict(size=11, color=CROSS), row=k, col=1)
+
+    o, h_, l_, c_ = (float(v[k].iloc[-1]) for k in ("Open", "High", "Low", "Close"))
+    chg = (c_ / float(v["Close"].iloc[-2]) - 1) * 100 if len(v) > 1 else 0.0
+    colr = UP if chg >= 0 else DN
+    names = " · ".join(html.escape(str(o_)) for o_ in overlays) if overlays else "no indicators"
+    head = (f"<b>{html.escape(title)}</b>  <span style='color:{CROSS}'>{html.escape(source)}</span>   "
+            f"O <span style='color:{colr}'>{o:,.2f}</span>  H <span style='color:{colr}'>{h_:,.2f}</span>  "
+            f"L <span style='color:{colr}'>{l_:,.2f}</span>  C <span style='color:{colr}'>{c_:,.2f}</span>  "
+            f"<span style='color:{colr}'>{chg:+.2f}%</span><br><span style='font-size:10px;color:{CROSS}'>{names}</span>")
+    fig.add_annotation(text=head, xref="paper", yref="paper", x=0.003, y=1.0, xanchor="left", yanchor="bottom",
+                       showarrow=False, align="left", font=dict(size=12, color=TXT))
+
+    fig.update_layout(template="plotly_dark", height=580 + 150 * n_pan, margin=dict(l=8, r=64, t=58, b=8),
+                      paper_bgcolor=BG, plot_bgcolor=BG, font=dict(family=FONT, size=12, color=TXT), showlegend=False,
+                      xaxis_rangeslider_visible=False, dragmode="pan", uirevision=uirevision, hovermode="x",
+                      hoverlabel=dict(bgcolor="#1e222d", bordercolor=GRID, font=dict(family=FONT, size=12)),
+                      newshape=dict(line=dict(color="#2962ff", width=2), fillcolor="rgba(41,98,255,.15)"),
+                      modebar=dict(bgcolor="rgba(0,0,0,0)", color=CROSS, activecolor="#2962ff"))
+    fig.update_xaxes(showgrid=True, gridcolor=GRID, gridwidth=1, zeroline=False, showline=False, showspikes=True,
+                     spikemode="across", spikesnap="cursor", spikecolor=CROSS, spikethickness=1, spikedash="dash",
+                     tickfont=dict(size=11, color=TXT))
+    fig.update_yaxes(showgrid=True, gridcolor=GRID, gridwidth=1, zeroline=False, showline=False, side="right",
+                     separatethousands=True, showspikes=True, spikemode="across", spikecolor=CROSS, spikethickness=1,
+                     spikedash="dash", tickfont=dict(size=11, color=TXT), secondary_y=False)
+    fig.update_yaxes(range=[y_lo, y_hi], secondary_y=False, row=1, col=1)
     return fig

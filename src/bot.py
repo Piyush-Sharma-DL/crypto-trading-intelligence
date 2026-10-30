@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
+import uuid
 
 import pandas as pd
 
@@ -40,7 +42,26 @@ def _news_guard(cfg: BotConfig, news_fetch, now: pd.Timestamp) -> tuple[bool, st
 
 
 def run_cycle(store: Store, bot_id: str, fetch=None, now: pd.Timestamp | None = None, min_history: int = 150,
-              news_fetch=None) -> dict:
+              news_fetch=None, runner: str = "page") -> dict:
+    """One check of one bot. Safe to call from several places at once: only one runner holds the bot's lease at a time,
+    every call leaves a heartbeat, and any unexpected error is logged instead of silently stopping the bot."""
+    if store.get(bot_id) is None:
+        return {"bot": bot_id, "status": "missing", "new_bars": 0}
+    owner = f"{runner}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    if not store.acquire(bot_id, owner, 60):
+        return {"bot": bot_id, "status": "busy", "new_bars": 0}
+    try:
+        result = _run_cycle(store, bot_id, fetch, now, min_history, news_fetch)
+    except Exception as exc:
+        store.log(bot_id, "error", f"Unexpected error: {type(exc).__name__}: {str(exc)[:140]}")
+        result = {"bot": bot_id, "status": "error", "new_bars": 0}
+    finally:
+        store.release(bot_id, owner)
+    store.heartbeat(bot_id, runner, result["status"])
+    return result
+
+
+def _run_cycle(store: Store, bot_id: str, fetch, now, min_history, news_fetch) -> dict:
     rec = store.get(bot_id)
     if rec is None:
         return {"bot": bot_id, "status": "missing", "new_bars": 0}
@@ -117,7 +138,7 @@ def main():
     while True:
         for b in store.list_bots():
             try:
-                print(time.strftime("%H:%M:%S"), run_cycle(store, b["bot_id"]))
+                print(time.strftime("%H:%M:%S"), run_cycle(store, b["bot_id"], runner="worker"))
             except Exception as exc:
                 print("error:", exc)
         if not a.loop:
