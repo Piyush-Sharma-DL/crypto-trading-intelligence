@@ -19,6 +19,10 @@ Headlines come from public RSS feeds, so everything in them is treated as hostil
 only http(s) links are kept, titles are escaped before display (page and chart tooltips), and each source is fetched with a timeout and a size cap.
 The bot's optional news guard can only make it *more* cautious (block new entries), never place trades.
 
+## Remembered settings are untrusted input
+Chart settings are restored from the page address or the owner's profile. Every value is checked against a strict list of allowed options and number ranges;
+anything unexpected (including oversized or compressed-bomb data) is ignored and replaced by the default. Only owners have a saved profile on the server.
+
 ## Honest limits
 - This is a free hosting tier: no firewall, no audit log, and the disk is wiped on restart (bot history on the website does not last; run the bot on your own computer for a lasting record).
 - The code repository is **public**, so anyone can read the strategy rules. If that matters, make the GitHub repository **private** (Streamlit Cloud can deploy private repositories).

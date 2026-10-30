@@ -10,7 +10,7 @@ python -m venv .venv && .venv\Scripts\activate          # Mac/Linux: source .ven
 pip install -r requirements-lstm.txt                    # includes PyTorch for the LSTM
 streamlit run app.py                                    # or double-click Start-Dashboard.bat (Windows)
 ```
-Tests (no internet needed): `python -m tests.news_test`, `python -m tests.news_guard_test`, `python -m tests.confluence_test`, `python -m tests.engine_test`, `python -m tests.bot_auth_test`, `python -m tests.smoke_test`, `python -m tests.live_test`, `python -m tests.ui_smoke` (the last also runs the indicator tests).
+Tests (no internet needed): `python -m tests.imba_settings_test`, `python -m tests.bot_reliability_test`, `python -m tests.news_test`, `python -m tests.news_guard_test`, `python -m tests.confluence_test`, `python -m tests.engine_test`, `python -m tests.bot_auth_test`, `python -m tests.smoke_test`, `python -m tests.live_test`, `python -m tests.ui_smoke` (the last also runs the indicator tests).
 
 ## Owner-only Bot Desk (new)
 The site is public, but the **Bot Desk** appears only after you sign in (Google account or password). See **OWNER_SETUP.md** and **SECURITY.md**.
@@ -23,6 +23,12 @@ It runs **paper-trading bots (simulated money only)** on the combined **Confluen
 - **Owners** see their paper bot on the Live Chart: entry/exit markers, the open trade's stop and target lines, and a card to create, pause or kill the bot.
 - Optional per-bot **news guard**: skip *new* trades for N minutes after a high-impact headline about that coin or the whole market. If the news cannot be checked, it blocks (fails safe).
 - Headline mood is a simple keyword rule on titles: a description of the wording, not a forecast.
+
+## Chart upgrades (new)
+- **TradingView-style chart:** dark palette, crosshair, OHLC header line, coloured last-price tag, faint volume bars, and drawing tools (line, path, rectangle, circle, eraser) in the chart toolbar.
+- **IMBA ALGO** layer: Fibonacci-channel trend with LONG/SHORT signals and an entry / stop / TP1-4 ladder (an independent implementation of the rules of the TradingView script; closed candles only).
+- **Remembered settings:** your chart settings come back automatically. The page address carries them (bookmark it), and signed-in owners also keep a private profile.
+- **Reliable bots:** only one runner can process a bot at a time, every check leaves a heartbeat, errors are logged instead of silently stopping the bot, and `Start-Bot-Worker.bat` keeps bots running with the website closed (see `ALWAYS_ON.md`).
 
 ## Pages
 | Page | What it does |
