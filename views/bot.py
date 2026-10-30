@@ -12,6 +12,7 @@ from src.paper_engine import BotConfig, new_state, run_backtest
 from src.paperstore import Store
 from src.newsui import mood_dot, render_headlines
 from src.security import esc, safe_ticker
+from src.ui import worker_status
 
 auth.require_owner()                                  # nothing below runs for anyone else
 store = Store()
@@ -171,7 +172,10 @@ with tab_run:
             if auto:
                 for b in store.list_bots():
                     if b["state"]["enabled"]:
-                        run_cycle(store, b["bot_id"], fetch=candles, news_fetch=guard_news)
+                        try:
+                            run_cycle(store, b["bot_id"], fetch=candles, news_fetch=guard_news, runner="page")
+                        except Exception as exc:
+                            st.warning(f"Could not check {b['bot_id']} this time ({type(exc).__name__}); will retry.")
             r = store.get(bot_id)
             if r is None:
                 return
@@ -191,6 +195,11 @@ with tab_run:
             k[2].metric("Max drawdown", f"{dd:.2f}%")
             k[3].metric("Trades closed", f"{len(trades)}")
             k[4].metric("Status", status)
+            ok, why = worker_status(r)
+            last = f" Last check: {r['last_run']} UTC by {r['last_runner']} ({r['last_status']})." if r.get("last_run") else ""
+            if s["enabled"]:
+                (st.caption if ok else st.warning)(("✅ " if ok else "⚠️ ") + why + ("" if ok else
+                      " Run **Start-Bot-Worker.bat** on your computer so it keeps running with the website closed.") + last)
 
             pos = s["position"]
             if pos and price:

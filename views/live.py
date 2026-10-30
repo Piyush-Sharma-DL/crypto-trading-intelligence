@@ -10,19 +10,40 @@ from src.confluence import ConfParams, confluence, status_rows
 from src import auth
 from src import news as N
 from src.bot import kill_switch, run_cycle
-from src.livechart import CONF, NEWS, live_chart
+from src import settings as S
+from src.imba import imba_algo, status_row as imba_status
+from src.imba import ladder as imba_ladder_for
+from src.livechart import CONF, IMBA_ALGO, NEWS, live_chart
 from src.newsui import mood_dot, render_headlines
 from src.paper_engine import BotConfig, new_state
 from src.paperstore import Store
-from src.security import esc
-from src.ui import asset_picker
+from src.security import esc, safe_ticker
+from src.ui import asset_picker, reset_settings, save_settings, seed_settings, worker_status
 
 COINS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "DOT-USD"]
-IMBA, OB = "IMBA (Imbalance / FVG)", "Order Blocks"
-OVERLAYS = [CONF, NEWS, "TOTT", IMBA, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
+FVG, OB = "Imbalance zones (FVG)", "Order Blocks"
+OVERLAYS = [CONF, NEWS, IMBA_ALGO, "TOTT", FVG, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
 PANELS = ["Volume", "RSI", "MACD"]
 BOT_TFS = ["5m", "15m", "30m", "1h", "4h"]
 ZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Dubai", "Asia/Tokyo", "Australia/Sydney"]
+OB_ZONES = ["Candle body", "Full candle (with wicks)"]
+CHART_CONFIG = {"scrollZoom": True, "displaylogo": False,                     # TradingView-style drawing tools in the toolbar
+                "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"],
+                "toImageButtonOptions": {"format": "png", "scale": 2}}
+
+# every setting the user can change, with its default and what counts as a valid value (also used to restore saved settings)
+SCHEMA = {
+    "asset": ("BTC-USD", lambda v: isinstance(v, str) and safe_ticker(v) == v),
+    "tf": ("15m", S.choice(TIMEFRAMES)), "bars": (150, S.choice(range(50, 401, 10))), "tz": ("UTC", S.choice(ZONES)),
+    "auto": (True, S.flag()), "every": (15, S.choice([5, 10, 15, 30, 60])),
+    "overlays": ([CONF, NEWS], S.multi(OVERLAYS)), "panels": ([], S.multi(PANELS)),
+    "tott_len": (40, S.num(2, 200)), "tott_pct": (1.0, S.num(0.1, 10.0)), "tott_coeff": (0.001, S.num(0.0, 0.05)),
+    "c_stop": (0.5, S.num(0.0, 3.0)), "c_rr": (2.0, S.num(0.5, 10.0)), "c_min": (4, S.num(4, 6)),
+    "imba_sens": (18.0, S.num(1.0, 60.0)), "imba_sl": (0.0, S.num(0.0, 30.0)), "imba_fixed": (False, S.flag()),
+    "fvg_min": (0.25, S.num(0.0, 3.0)), "ob_swing": (10, S.num(3, 50)), "ob_disp": (1.5, S.num(0.5, 5.0)),
+    "ob_zone": ("Candle body", S.choice(OB_ZONES)), "max_zones": (3, S.num(1, 15)),
+    "show_mit": (False, S.flag()), "show_old": (False, S.flag()), "show_vol": (True, S.flag()),
+}
 
 
 # ---------------------------------------------------------------- short-lived caches (shared by visitors)
@@ -73,6 +94,10 @@ def bot_panel(store: Store, bot_id: str, ticker: str, tf: str, price: float) -> 
     rec = store.get(bot_id)
     cfg, s = BotConfig.from_dict(rec["cfg"]), rec["state"]
     pos = s["position"]
+    ok, why = worker_status(rec)
+    if s["enabled"]:
+        (st.caption if ok else st.warning)(("✅ " if ok else "⚠️ ") + why + ("" if ok else
+              " To keep it running with the website closed, start **Start-Bot-Worker.bat** on your computer."))
     k = st.columns(4)
     k[0].metric("Equity (fake)", f"${s['equity']:,.2f}", f"{(s['equity'] / cfg.start_equity - 1) * 100:+.2f}% since start")
     k[1].metric("Status", f"🛑 {s['halt']}" if s["halt"] else ("▶ Running" if s["enabled"] else "⏸ Paused"))
@@ -88,41 +113,54 @@ def countdown(sec: int) -> str:
     return (f"{d}d " if d else "") + f"{h:02d}:{m:02d}:{s:02d}"
 
 
-# ---------------------------------------------------------------- sidebar
+# ---------------------------------------------------------------- sidebar (settings are remembered)
+owner_store = Store() if auth.is_owner() else None          # visitors never touch the database
+seed_settings(SCHEMA, "lv_", "live_profile", owner_store)
 with st.sidebar:
     st.title("📡 Live controls")
     ticker = asset_picker(COINS)
-    tf = st.radio("Candle size", list(TIMEFRAMES), index=1, horizontal=True)
-    bars = st.slider("Candles on chart", 50, 400, 150, 10)
-    tz = st.selectbox("Display time zone", ZONES)
+    tf = st.radio("Candle size", list(TIMEFRAMES), horizontal=True, key="lv_tf")
+    bars = st.slider("Candles on chart", 50, 400, step=10, key="lv_bars")
+    tz = st.selectbox("Display time zone", ZONES, key="lv_tz")
 
     st.subheader("Live updates")
-    auto = st.toggle("Auto-refresh", True)
-    every = st.select_slider("Refresh every (seconds)", [5, 10, 15, 30, 60], value=15)
+    auto = st.toggle("Auto-refresh", key="lv_auto")
+    every = st.select_slider("Refresh every (seconds)", [5, 10, 15, 30, 60], key="lv_every")
 
     st.subheader("Indicators")
-    overlays = st.multiselect("On the chart", OVERLAYS, default=[CONF, NEWS],
-                              help="Default: the combined Confluence indicator (TOTT + IMBA + order blocks in one) and news markers. "
-                                   "You can also switch on any single indicator.")
-    panels = st.multiselect("Extra panels below", PANELS, default=[])
+    overlays = st.multiselect("On the chart", OVERLAYS, key="lv_overlays",
+                              help="Default: the combined Confluence indicator and news markers. Add the real IMBA ALGO, "
+                                   "TOTT, order blocks or any classic indicator.")
+    panels = st.multiselect("Extra panels below", PANELS, key="lv_panels")
+    show_vol = st.checkbox("Volume bars on the price chart", key="lv_show_vol")
     with st.expander("Indicator settings"):
+        st.markdown("**IMBA ALGO** (fib-channel trend)")
+        imba_sens = st.number_input("Sensitivity (channel = sensitivity x 10 candles)", 1.0, 60.0, step=0.5, key="lv_imba_sens")
+        imba_fixed = st.checkbox("Fixed stop % from entry (instead of the 78.6% / 23.6% level)", key="lv_imba_fixed")
+        imba_sl = st.number_input("Stop buffer / fixed stop %", 0.0, 30.0, step=0.1, key="lv_imba_sl")
         st.markdown("**TOTT** (Twin Optimized Trend Tracker)")
-        tott_len = st.number_input("OTT period", 2, 200, 40)
-        tott_pct = st.number_input("Optimization constant (%)", 0.1, 10.0, 1.0, 0.1)
-        tott_coeff = st.number_input("Twin coefficient", 0.0, 0.05, 0.001, 0.0005, format="%.4f")
+        tott_len = st.number_input("OTT period", 2, 200, key="lv_tott_len")
+        tott_pct = st.number_input("Optimization constant (%)", 0.1, 10.0, step=0.1, key="lv_tott_pct")
+        tott_coeff = st.number_input("Twin coefficient", 0.0, 0.05, step=0.0005, format="%.4f", key="lv_tott_coeff")
         st.markdown("**Confluence signal**")
-        c_stop = st.number_input("Stop buffer beyond the zone (x ATR)", 0.0, 3.0, 0.5, 0.1)
-        c_rr = st.number_input("Reward : risk target", 0.5, 10.0, 2.0, 0.5)
-        c_min = st.number_input("Minimum confidence (4-6)", 4, 6, 4)
-        st.markdown("**IMBA** (fair value gaps)")
-        fvg_min = st.number_input("Minimum gap size (x ATR)", 0.0, 3.0, 0.25, 0.05)
+        c_stop = st.number_input("Stop buffer beyond the zone (x ATR)", 0.0, 3.0, step=0.1, key="lv_c_stop")
+        c_rr = st.number_input("Reward : risk target", 0.5, 10.0, step=0.5, key="lv_c_rr")
+        c_min = st.number_input("Minimum confidence (4-6)", 4, 6, key="lv_c_min")
+        st.markdown("**Imbalance zones** (fair value gaps)")
+        fvg_min = st.number_input("Minimum gap size (x ATR)", 0.0, 3.0, step=0.05, key="lv_fvg_min")
         st.markdown("**Order blocks**")
-        ob_swing = st.number_input("Structure lookback (candles)", 3, 50, 10)
-        ob_disp = st.number_input("Impulse size (x ATR)", 0.5, 5.0, 1.5, 0.1)
-        ob_zone = st.selectbox("Order block zone covers", ["Candle body", "Full candle (with wicks)"])
-        max_zones = st.number_input("Max zones shown per type", 1, 15, 3)
-        show_mit = st.checkbox("Also show mitigated zones", False)
-        show_old = st.checkbox("Show zones that formed before the visible candles", False)
+        ob_swing = st.number_input("Structure lookback (candles)", 3, 50, key="lv_ob_swing")
+        ob_disp = st.number_input("Impulse size (x ATR)", 0.5, 5.0, step=0.1, key="lv_ob_disp")
+        ob_zone = st.selectbox("Order block zone covers", OB_ZONES, key="lv_ob_zone")
+        max_zones = st.number_input("Max zones shown per type", 1, 15, key="lv_max_zones")
+        show_mit = st.checkbox("Also show mitigated zones", key="lv_show_mit")
+        show_old = st.checkbox("Show zones that formed before the visible candles", key="lv_show_old")
+    st.caption("💾 Your settings are remembered automatically" + (" (saved to your private profile)." if owner_store else
+               " (kept in this page's web address: bookmark it to keep them)."))
+    if st.button("↺ Reset chart settings"):
+        reset_settings(SCHEMA, "lv_", "live_profile", owner_store)
+        st.rerun()
+save_settings(SCHEMA, "lv_", "live_profile", owner_store)
 
 if ticker is None:
     st.error("That is not a valid ticker. Use Yahoo format, for example LTC-USD.")
@@ -184,7 +222,10 @@ def live_panel():
         store = Store()
         rec = store.get(f"{ticker}@{tf}")
         if rec and rec["state"]["enabled"]:
-            run_cycle(store, f"{ticker}@{tf}", fetch=lambda s_, t_, n_: (df, source), news_fetch=news_for_guard)
+            try:
+                run_cycle(store, f"{ticker}@{tf}", fetch=lambda s_, t_, n_: (df, source), news_fetch=news_for_guard, runner="page")
+            except Exception as exc:
+                st.warning(f"The bot could not be checked this time ({type(exc).__name__}). It will try again on the next refresh.")
             rec = store.get(f"{ticker}@{tf}")
         if rec:
             bot_overlay = {"trades": store.trades(f"{ticker}@{tf}"), "position": rec["state"]["position"]}
@@ -194,18 +235,22 @@ def live_panel():
     cp = ConfParams(tott_length=cfg["tott_length"], tott_percent=cfg["tott_percent"], tott_coeff=cfg["tott_coeff"],
                     fvg_min_atr=cfg["fvg_min_atr"], ob_swing=cfg["ob_swing"], ob_disp=cfg["ob_disp"], ob_body=cfg["ob_body"],
                     stop_atr=float(c_stop), rr=float(c_rr), min_conf=int(c_min))
+    imba_res = imba_algo(closed, sensitivity=float(imba_sens), sl_pct=float(imba_sl), fixed_stop=bool(imba_fixed))
+    imba_full = imba_res.reindex(df.index)
+    imba_full["signal"] = imba_full["signal"].fillna(0)
     conf_res = confluence(closed, cp)
     conf_full = conf_res.reindex(df.index)
     conf_full["signal"] = conf_full["signal"].fillna(0)
     zones = []
-    if IMBA in overlays or CONF in overlays:
+    if FVG in overlays or CONF in overlays:
         zones += I.keep_recent(ind["fvg"], cfg["max_zones"], show_mit)
     if OB in overlays or CONF in overlays:
         zones += I.keep_recent(ind["ob"], cfg["max_zones"], show_mit)
     fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, ind, zones, price, tz, bars, uirevision=f"{ticker}-{tf}",
-                     show_old_zones=show_old, conf=conf_full,
-                     news=asset_news, bot=bot_overlay)
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displaylogo": False})
+                     show_old_zones=show_old, conf=conf_full, news=asset_news, bot=bot_overlay,
+                     imba=imba_full, imba_ladder=imba_ladder_for(closed, imba_res), title=f"{ticker} · {tf}",
+                     source=source.split(" (")[0], show_volume=bool(show_vol))
+    st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     if owner:
         bot_panel(store or Store(), f"{ticker}@{tf}", ticker, tf, price)
@@ -217,7 +262,7 @@ def live_panel():
         mm = N.mood(day_news)
         news_row = pd.DataFrame([{"Indicator": f"News mood ({base}, 24h)", "Value": f"{mm['score']:+.2f}",
                                   "Reading": f"{mood_dot(mm['score'])} {mm['label']} · {mm['n']} headlines · {mm['high']} high-impact"}])
-        snap = pd.concat([status_rows(closed, conf_res, cp), news_row, snap], ignore_index=True)
+        snap = pd.concat([status_rows(closed, conf_res, cp), imba_status(imba_res, price), news_row, snap], ignore_index=True)
         st.markdown(f"**Live indicator tracker** · 🟢 {summ['bull']} bullish · 🔴 {summ['bear']} bearish · ⚪ {summ['neutral']} neutral")
         st.dataframe(snap, hide_index=True, use_container_width=True)
     with right:
@@ -240,7 +285,12 @@ and a trailing stop (OTT). The two OTT lines sit slightly above and below it. **
 line, **SELL** when it crosses below the lower line; between the lines is a flat zone. Defaults (period 40, 1%) suit slower charts, so tune them
 for 5-minute candles.
 
-**IMBA, imbalance / fair value gap.** Three candles where the 1st candle's high and the 3rd candle's low do not overlap (or the reverse),
+**IMBA ALGO (fib-channel trend).** Takes the highest high and lowest low of the last sensitivity x 10 candles and draws Fibonacci levels
+between them. The 50% line is the trend line. **LONG** when a candle closes above the 50% line and inside the top 23.6% of the channel;
+**SHORT** when it closes below the 50% line and inside the bottom 21.4%. The suggested stop sits at the 78.6% (long) or 23.6% (short) level,
+which is usually far away, and targets are +1/2/3/4% from entry. Signals use closed candles only.
+
+**Imbalance zones (FVG).** Three candles where the 1st candle's high and the 3rd candle's low do not overlap (or the reverse),
 leaving a price gap. Price often revisits it. A green zone is a bullish gap, red is bearish, and it disappears once price trades fully through it.
 
 **Order blocks.** The last opposite-colour candle before a strong impulsive move that breaks recent structure. Blue = bullish block (possible support),
