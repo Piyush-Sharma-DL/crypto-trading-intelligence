@@ -24,7 +24,13 @@ It runs **paper-trading bots (simulated money only)** on the combined **Confluen
 - Optional per-bot **news guard**: skip *new* trades for N minutes after a high-impact headline about that coin or the whole market. If the news cannot be checked, it blocks (fails safe).
 - Headline mood is a simple keyword rule on titles: a description of the wording, not a forecast.
 
-## Chart upgrades (new)
+## Latest changes
+- **Zoom stays:** the chart is drawn once and is no longer redrawn by a timer. It redraws only when a new candle opens, when you press **Update chart now**, or never if **Hold chart** is on. Prices, news, tracker and bot still update live.
+- **Confluence is now TOTT trend + Support/Resistance zones** (S/R rules after the TradingView script by Trend-My-Friend, MPL 2.0). Order blocks and my imbalance zones were removed from it (still available as separate optional layers).
+- **News moved under the chart** as a Forex-Factory-style list with time: red = HIGH (danger), orange = MEDIUM (minor), yellow = LOW (normal).
+- **The bot explains itself:** every bot shows what it is waiting for (or why a signal was ignored), and can be configured from the chart.
+
+## Chart upgrades
 - **TradingView-style chart:** dark palette, crosshair, OHLC header line, coloured last-price tag, faint volume bars, and drawing tools (line, path, rectangle, circle, eraser) in the chart toolbar.
 - **IMBA ALGO** layer: Fibonacci-channel trend with LONG/SHORT signals and an entry / stop / TP1-4 ladder (an independent implementation of the rules of the TradingView script; closed candles only).
 - **Remembered settings:** your chart settings come back automatically. The page address carries them (bookmark it), and signed-in owners also keep a private profile.

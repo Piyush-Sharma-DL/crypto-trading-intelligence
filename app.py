@@ -16,6 +16,13 @@ st.markdown("""
         font-size:1.6rem; letter-spacing:.07em; color:#0b1220;}
 .subtle {color:#94a3b8; font-size:.85rem;}
 .hero {font-size:2.1rem; font-weight:800; margin-bottom:0;}
+.ff {width:100%; border-collapse:collapse; font-size:.86rem;}
+.ff th {text-align:left; color:#94a3b8; font-weight:600; border-bottom:1px solid rgba(148,163,184,.25); padding:.35rem .5rem;}
+.ff td {padding:.4rem .5rem; border-bottom:1px solid rgba(148,163,184,.12); vertical-align:top;}
+.ff a {color:inherit; text-decoration:none;} .ff a:hover {text-decoration:underline;}
+.ffT {white-space:nowrap; font-variant-numeric:tabular-nums;} .ffA {color:#94a3b8; font-size:.75rem;} .ffS {color:#94a3b8; white-space:nowrap;}
+.ffChip {display:inline-block; padding:.08rem .5rem; border-radius:4px; font-size:.72rem; font-weight:800; color:#fff; letter-spacing:.03em;}
+.ffLegend {margin-top:.5rem; color:#94a3b8; font-size:.78rem;}
 /* metric cards shrink with the window instead of being cut off */
 [data-testid="stMetricValue"], [data-testid="stMetricValue"] div {font-size: clamp(1.05rem, 2.1vw, 2.2rem) !important;}
 [data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p {font-size: clamp(.62rem, 1vw, .9rem) !important; white-space: normal !important;}
