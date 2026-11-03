@@ -195,6 +195,8 @@ with tab_run:
             k[2].metric("Max drawdown", f"{dd:.2f}%")
             k[3].metric("Trades closed", f"{len(trades)}")
             k[4].metric("Status", status)
+            if s.get("detail"):
+                st.info("🧠 " + s["detail"])
             ok, why = worker_status(r)
             last = f" Last check: {r['last_run']} UTC by {r['last_runner']} ({r['last_status']})." if r.get("last_run") else ""
             if s["enabled"]:
