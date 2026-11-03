@@ -184,8 +184,8 @@ def order_blocks(df: pd.DataFrame, swing: int = 10, disp: float = 1.5, back: int
 
 def keep_recent(zones: list[dict], max_per_kind: int, show_mitigated: bool = False) -> list[dict]:
     out = []
-    for kind in ("bull_fvg", "bear_fvg", "bull_ob", "bear_ob"):
-        z = [x for x in zones if x["kind"] == kind and (show_mitigated or not x["mitigated"])]
+    for kind in ("bull_fvg", "bear_fvg", "bull_ob", "bear_ob", "support", "resistance"):
+        z = [x for x in zones if x["kind"] == kind and not x.get("dropped") and (show_mitigated or not x["mitigated"])]
         out += z[-max_per_kind:]
     return out
 
@@ -204,7 +204,8 @@ def compute_all(df: pd.DataFrame, tf_minutes: int, cfg: dict | None = None) -> d
     )
 
 
-ZONE_LABEL = {"bull_fvg": "Bullish IMBA", "bear_fvg": "Bearish IMBA", "bull_ob": "Bullish OB", "bear_ob": "Bearish OB"}
+ZONE_LABEL = {"bull_fvg": "Bullish imbalance", "bear_fvg": "Bearish imbalance", "bull_ob": "Bullish OB", "bear_ob": "Bearish OB",
+              "support": "Support", "resistance": "Resistance"}
 
 
 def snapshot(df: pd.DataFrame, ind: dict) -> tuple[pd.DataFrame, dict]:

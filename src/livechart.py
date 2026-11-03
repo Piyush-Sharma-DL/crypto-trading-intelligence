@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-CONF = "Confluence (TOTT + IMBA + OB)"
+CONF = "Confluence (TOTT + Support/Resistance)"
 NEWS = "News markers"
 IMBA_ALGO = "IMBA ALGO (Fib trend)"
 GREEN, RED, BLUE, AMBER, VIOLET = "#22c55e", "#ef4444", "#38bdf8", "#f59e0b", "#a78bfa"
@@ -20,6 +20,8 @@ ZONE_STYLE = {  # fill, border, label
     "bear_fvg": ("rgba(239,68,68,.16)", "rgba(239,68,68,.55)", "IMBA ↓"),
     "bull_ob": ("rgba(56,189,248,.22)", "rgba(56,189,248,.9)", "OB ↑"),
     "bear_ob": ("rgba(245,158,11,.22)", "rgba(245,158,11,.9)", "OB ↓"),
+    "support": ("rgba(76,175,79,.24)", "rgba(76,175,79,.75)", "Support"),
+    "resistance": ("rgba(225,33,33,.24)", "rgba(225,33,33,.75)", "Resistance"),
 }
 
 
@@ -120,7 +122,7 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
             fig.add_trace(go.Scatter(
                 x=x[at], y=v["High"].values[at] * 1.0015, mode="markers", name="News",
                 marker=dict(symbol=["star" if h else "diamond" for h in hi], size=[14 if h else 9 for h in hi],
-                            color=[GREEN if s > .08 else RED if s < -.08 else "#94a3b8" for s in nv["sentiment"]],
+                            color=["#ef4444" if i == 2 else "#f59e0b" if i == 1 else "#facc15" for i in nv["impact"]],
                             line=dict(width=1, color="white")),
                 hovertext=[f"<b>{html.escape(str(t))}</b><br>{html.escape(str(s))} · mood {m:+.2f}"
                            for t, s, m in zip(nv["title"], nv["source"], nv["sentiment"])], hoverinfo="text"), 1, 1)

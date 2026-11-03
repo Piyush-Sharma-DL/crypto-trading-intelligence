@@ -12,7 +12,7 @@ import uuid
 
 import pandas as pd
 
-from .confluence import ConfParams, confluence
+from .confluence import ConfParams, confluence, waiting_text
 from .live import TIMEFRAMES, get_candles
 from .news import fetch_news, news_risk
 from .paper_engine import BotConfig, _close_position, step
@@ -21,6 +21,24 @@ from .paperstore import Store
 
 def params_for(cfg: BotConfig) -> ConfParams:
     return ConfParams(stop_atr=cfg.stop_atr, rr=cfg.rr, min_conf=cfg.min_conf)
+
+
+def diagnose(cfg: BotConfig, state: dict, res: pd.DataFrame, price: float) -> str:
+    """One plain-English line: what is the bot doing, or waiting for, right now?"""
+    if state.get("halt"):
+        return f"Stopped: {state['halt']}."
+    if not state.get("enabled"):
+        return "Paused."
+    pos = state.get("position")
+    if pos:
+        return (f"In a {'LONG' if pos['side'] == 1 else 'SHORT'} since {pos['opened']}: stop {pos['stop']:,.2f}, "
+                f"target {pos['target']:,.2f}. Waiting for one of them (or the TOTT trend to flip).")
+    if state.get("trades_today", 0) >= cfg.max_trades_per_day:
+        return "Reached today's trade limit; waiting for the next UTC day."
+    last = res.iloc[-1]
+    if int(last["signal"]) == -1 and not cfg.allow_short:
+        return "A SHORT signal appeared on the last candle but shorts are switched off (long-only), so it was ignored."
+    return waiting_text(res, price, allow_short=cfg.allow_short)
 
 
 def closed_candles(df: pd.DataFrame, tf: str, now: pd.Timestamp) -> pd.DataFrame:
@@ -80,6 +98,7 @@ def _run_cycle(store: Store, bot_id: str, fetch, now, min_history, news_fetch) -
 
     if state["last_bar"] is None:                                   # first run: arm on the latest closed candle, never backfill
         state["last_bar"] = str(closed.index[-1])
+        state["detail"] = diagnose(cfg, state, confluence(closed, params_for(cfg)), float(closed["Close"].iloc[-1]))
         store.save_state(bot_id, state)
         store.log(bot_id, "info", f"Armed on {cfg.symbol} {cfg.timeframe}. Waiting for the next candle to close.")
         return {"bot": bot_id, "status": "armed", "new_bars": 0}
@@ -93,6 +112,7 @@ def _run_cycle(store: Store, bot_id: str, fetch, now, min_history, news_fetch) -
     if len(new) > 3:
         store.log(bot_id, "warn", f"{len(new)} candles were missed while the bot was offline: managing the open trade, "
                                   f"but only the newest candle can open a new one.")
+    note = ""
     for i in new:
         ts, r = closed.index[i], res.iloc[i]
         allow = (i == new[-1])
@@ -100,6 +120,7 @@ def _run_cycle(store: Store, bot_id: str, fetch, now, min_history, news_fetch) -
             blocked, why = _news_guard(cfg, news_fetch, now)
             if blocked:
                 allow = False
+                note = f"A signal appeared but the news guard blocked it: {why}"
                 store.log(bot_id, "warn", f"[{ts:%Y-%m-%d %H:%M}] News guard blocked a "
                                           f"{'LONG' if int(r['signal']) == 1 else 'SHORT'} signal: {why}")
         state, events, trades = step(state, cfg, ts, *closed.iloc[i][["Open", "High", "Low", "Close"]].tolist(),
@@ -110,6 +131,7 @@ def _run_cycle(store: Store, bot_id: str, fetch, now, min_history, news_fetch) -
         for t in trades:
             store.add_trade(bot_id, t)
         store.add_equity(bot_id, ts, state["equity"], closed["Close"].iloc[i])
+    state["detail"] = (note or diagnose(cfg, state, res, float(closed["Close"].iloc[-1])))
     store.save_state(bot_id, state)
     return {"bot": bot_id, "status": "processed", "new_bars": len(new), "equity": state["equity"], "halt": state["halt"]}
 
