@@ -13,17 +13,20 @@ from src.confluence import ConfParams, confluence, status_rows, waiting_text
 from src.imba import imba_algo, status_row as imba_status
 from src.imba import ladder as imba_ladder_for
 from src.live import TIMEFRAMES, candle_seconds_left, get_candles, get_quote
-from src.livechart import CONF, IMBA_ALGO, live_chart
+from src.livechart import CONF, IMBA_ALGO, SMS, live_chart
 from src.newsui import mood_dot, render_headlines, render_news_strip
 from src.paper_engine import BotConfig, new_state
 from src.paperstore import Store
 from src.security import esc, safe_ticker
+from src.smschart import SMS_LAYERS
+from src.smsui import render_sms_dashboard
+from src.sms import SMSParams, sms_dashboard, sms_events, sms_lines
 from src.sr import sr_zones
 from src.ui import asset_picker, reset_settings, save_settings, seed_settings, worker_status
 
 COINS = ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "DOT-USD"]
 SR, FVG, OB = "Support / Resistance zones", "Imbalance zones (FVG)", "Order Blocks"
-OVERLAYS = [CONF, IMBA_ALGO, "TOTT", SR, FVG, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
+OVERLAYS = [CONF, SMS, IMBA_ALGO, "TOTT", SR, FVG, OB, "SMA 20", "SMA 50", "EMA 21", "EMA 200", "Bollinger Bands", "VWAP", "Supertrend"]
 PANELS = ["Volume", "RSI", "MACD"]
 BOT_TFS = ["5m", "15m", "30m", "1h", "4h"]
 ZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Dubai", "Asia/Tokyo", "Australia/Sydney"]
@@ -45,6 +48,9 @@ SCHEMA = {
     "fvg_min": (0.25, S.num(0.0, 3.0)), "ob_swing": (10, S.num(3, 50)), "ob_disp": (1.5, S.num(0.5, 5.0)),
     "ob_zone": ("Candle body", S.choice(OB_ZONES)), "max_zones": (4, S.num(1, 15)),
     "show_mit": (False, S.flag()), "show_old": (False, S.flag()),
+    "sms_layers": (list(SMS_LAYERS), S.multi(SMS_LAYERS)), "sms_fib": (100, S.num(20, 300)), "sms_liq": (5, S.num(2, 20)),
+    "sms_tl": (5, S.num(2, 20)), "sms_maxtl": (6, S.num(1, 20)), "sms_ob_atr": (1.0, S.num(0.1, 5.0)),
+    "sms_ob_back": (5, S.num(1, 20)), "sms_ob_ext": (20, S.num(1, 100)), "sms_maxob": (10, S.num(1, 30)),
 }
 
 
@@ -111,6 +117,16 @@ with st.sidebar:
         imba_sens = st.number_input("Sensitivity (channel = sensitivity x 10 candles)", 1.0, 60.0, step=0.5, key="lv_imba_sens")
         imba_fixed = st.checkbox("Fixed stop % from entry (instead of the 78.6% / 23.6% level)", key="lv_imba_fixed")
         imba_sl = st.number_input("Stop buffer / fixed stop %", 0.0, 30.0, step=0.1, key="lv_imba_sl")
+        st.markdown("**Irfan Smart Market Structure**")
+        sms_layers = st.multiselect("Layers", SMS_LAYERS, key="lv_sms_layers")
+        sms_fib = st.number_input("Fibonacci lookback", 20, 300, key="lv_sms_fib")
+        sms_liq = st.number_input("Liquidity pivot length", 2, 20, key="lv_sms_liq")
+        sms_tl = st.number_input("Trendline pivot length", 2, 20, key="lv_sms_tl")
+        sms_maxtl = st.number_input("Max trendlines per side", 1, 20, key="lv_sms_maxtl")
+        sms_ob_atr = st.number_input("Order block displacement (x ATR)", 0.1, 5.0, step=0.1, key="lv_sms_ob_atr")
+        sms_ob_back = st.number_input("Order block search lookback", 1, 20, key="lv_sms_ob_back")
+        sms_ob_ext = st.number_input("Order block extension (candles)", 1, 100, key="lv_sms_ob_ext")
+        sms_maxob = st.number_input("Max order blocks per side", 1, 30, key="lv_sms_maxob")
         st.markdown("**Imbalance zones** (fair value gaps, optional layer)")
         fvg_min = st.number_input("Minimum gap size (x ATR)", 0.0, 3.0, step=0.05, key="lv_fvg_min")
         st.markdown("**Order blocks** (optional layer)")
@@ -159,7 +175,16 @@ def analyse(df):
     ind = I.compute_all(df, TIMEFRAMES[tf], dict(tott_length=int(tott_len), tott_percent=float(tott_pct), tott_coeff=float(tott_coeff),
                                                  fvg_min_atr=float(fvg_min), ob_swing=int(ob_swing), ob_disp=float(ob_disp),
                                                  ob_body=(ob_zone == "Candle body")))
+    sms = sp = None
+    if SMS in overlays:                                                       # Irfan SMS: lines may include the forming candle, events never do
+        sp = SMSParams(fib_lookback=int(sms_fib), liq_pivot=int(sms_liq), tl_pivot=int(sms_tl), max_tl=int(sms_maxtl),
+                       ob_atr_mult=float(sms_ob_atr), ob_lookback=int(sms_ob_back), ob_extend=int(sms_ob_ext), max_ob=int(sms_maxob))
+        out = sms_events(closed, sp)
+        sms = {"lines": sms_lines(df, sp), "events": out["events"].reindex(df.index), "events_closed": out["events"],
+               "trendlines": out["trendlines"], "order_blocks": out["order_blocks"],
+               "swing_high_bar": out["swing_high_bar"], "swing_low_bar": out["swing_low_bar"]}
     return dict(closed=closed, cp=cp, ind=ind, conf=confluence(closed, cp), sr=sr_zones(closed, left, int(sr_right), int(sr_max)),
+                sms=sms, sms_params=sp,
                 imba=imba_algo(closed, sensitivity=float(imba_sens), sl_pct=float(imba_sl), fixed_stop=bool(imba_fixed)))
 
 
@@ -303,7 +328,7 @@ if OB in overlays:
 fig = live_chart(df, TIMEFRAMES[tf], overlays, panels, A["ind"], zones, price, tz, bars, uirevision=f"{ticker}-{tf}",
                  show_old_zones=show_old, conf=conf_full, bot=bot_overlay, imba=imba_full,
                  imba_ladder=imba_ladder_for(A["closed"], A["imba"]), title=f"{ticker} · {tf}",
-                 source=source.split(" (")[0], show_volume=bool(show_vol))
+                 source=source.split(" (")[0], show_volume=bool(show_vol), sms=A["sms"], sms_layers=list(sms_layers))
 st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 st.session_state["_chart_candle"] = (ticker, tf, df.index[-1])
 
@@ -333,6 +358,9 @@ def live_details():
         st.caption("News feeds are not reachable right now.")
 
     A = analyse(df)
+    if A["sms"] is not None:
+        rows, score, text = sms_dashboard(df, A["sms"]["lines"], A["sms"]["events_closed"], price, A["sms_params"])
+        render_sms_dashboard(rows, score, text)
     left, right = st.columns([3, 2])
     with left:
         snap, summ = I.snapshot(df, A["ind"])
@@ -364,6 +392,11 @@ trend direction. **Support/Resistance** zones come from swing highs and lows: a 
 zone the bottom quarter of a swing-low candle; a zone is broken when price reaches the swing high/low itself. **LONG** when the trend is up and price
 dips into support and closes back above it; **SHORT** is the mirror image. Each signal comes with a stop just beyond the zone and a target.
 (S/R rules after the TradingView script by Trend-My-Friend, MPL 2.0.)
+
+**Irfan Smart Market Structure.** An all-in-one market-structure view: EMA 9/21 cloud with crossovers, MA 50/200 with golden/death crosses,
+Supertrend, Bollinger Bands, trend-aware Fibonacci levels, liquidity levels and sweeps (price wicks through a swing high/low and closes back),
+trendlines through the last two swing points, and displacement order blocks. The dashboard scores the picture from -7 to +7. Crosses, sweeps,
+trendlines and blocks use closed candles only.
 
 **IMBA ALGO (fib-channel trend).** Takes the highest high and lowest low of the last sensitivity x 10 candles and draws Fibonacci levels
 between them. The 50% line is the trend line. **LONG** when a candle closes above the 50% line and inside the top 23.6% of the channel;
