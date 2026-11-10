@@ -8,9 +8,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from .smschart import add_sms
+
 CONF = "Confluence (TOTT + Support/Resistance)"
 NEWS = "News markers"
 IMBA_ALGO = "IMBA ALGO (Fib trend)"
+SMS = "Irfan Smart Market Structure"
 GREEN, RED, BLUE, AMBER, VIOLET = "#22c55e", "#ef4444", "#38bdf8", "#f59e0b", "#a78bfa"
 # TradingView-style palette
 BG, GRID, TXT, UP, DN, CROSS = "#131722", "#2a2e39", "#b2b5be", "#26a69a", "#ef5350", "#9598a1"
@@ -36,7 +39,8 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
                zones: list[dict], price: float, tz: str = "UTC", n: int = 150, uirevision: str = "",
                show_old_zones: bool = False, conf: pd.DataFrame | None = None,
                news: pd.DataFrame | None = None, bot: dict | None = None, imba: pd.DataFrame | None = None,
-               imba_ladder: dict | None = None, title: str = "", source: str = "", show_volume: bool = True) -> go.Figure:
+               imba_ladder: dict | None = None, title: str = "", source: str = "", show_volume: bool = True,
+               sms: dict | None = None, sms_layers: list | None = None) -> go.Figure:
     v = df.iloc[-n:]
     x = _loc(v.index, tz)
     step = pd.Timedelta(minutes=tf_minutes)
@@ -80,6 +84,8 @@ def live_chart(df: pd.DataFrame, tf_minutes: int, overlays: list[str], panels: l
                            yanchor="bottom", font=dict(size=10, color=ZONE_STYLE[z["kind"]][1]), row=1, col=1)
 
     # ---- overlays
+    if sms is not None and SMS in overlays:
+        add_sms(fig, v, x, step, lambda t_: _loc(t_, tz), df.index, sms, sms_layers or [], y_lo, y_hi)
     if "TOTT" in overlays or CONF in overlays:
         t = ind["tott"].reindex(v.index)
         line(t["support"], "TOTT support", BLUE, 2)
